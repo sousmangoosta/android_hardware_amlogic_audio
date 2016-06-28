@@ -12,6 +12,8 @@
 #include <hardware/hardware.h>
 #include <system/audio.h>
 #include <hardware/audio.h>
+#define LOG_TAG "audio_hw_hdmi"
+
 /*
   type : 0 -> playback, 1 -> capture
 */
@@ -211,5 +213,95 @@ fail:
     }
     return NULL;
 }
+char*  get_hdmi_arc_cap(unsigned *ad, int maxsize, const char *keys)
+{
+    int i = 0;
+    int channel = 0;
+    int dgraw = 0;
+    int fd = -1;
+    int size = 0;
+    char *aud_cap = NULL;
+    unsigned char format, ch, sr;
+    aud_cap = (char*)malloc(1024);
+    if (aud_cap == NULL) {
+        ALOGE("malloc buffer failed\n");
+        goto fail;
+    }
+    memset(aud_cap, 0, 1024);
+    ALOGI("get_hdmi_arc_cap\n");
+    /* check the format cap */
+    if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_FORMATS)) {
+        size += sprintf(aud_cap, "=%s|", "AUDIO_FORMAT_PCM_16_BIT");
+    }
+    /*check the channel cap */
+    else if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_CHANNELS)) {
+        //ALOGI("check channels\n");
+        /* take the 2ch suppported as default */
+        size += sprintf(aud_cap, "=%s|", "AUDIO_CHANNEL_OUT_STEREO");
+    } else if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES)) {
+        /* take the 32/44.1/48 khz suppported as default */
+        size += sprintf(aud_cap, "=%s|", "32000|44100|48000");
+        //ALOGI("check sample rate\n");
+    }
+    for (i = 0; i < maxsize; i++) {
+        if (ad[i] != 0) {
+            format = (ad[i] >> 19) & 0xf;
+            ch = (ad[i] >> 16) & 0x7;
+            sr = (ad[i] > 8) & 0xf;
+            ALOGI("ad %x,format %d,ch %d,sr %d\n", ad[i], format, ch, sr);
+            /* check the format cap */
+            if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_FORMATS)) {
+                //ALOGI("check format\n");
+                if (format == 10) {
+                    size += sprintf(aud_cap + size, "%s|", "AUDIO_FORMAT_E_AC3");
+                }
+                if (format == 2) {
+                    size += sprintf(aud_cap + size, "%s|", "AUDIO_FORMAT_AC3");
+                }
+                if (format == 11) {
+                    size += sprintf(aud_cap + size, "%s|", "AUDIO_FORMAT_DTS|AUDIO_FORMAT_DTSHD");
+                } else if (format == 7) {
+                    size += sprintf(aud_cap + size, "%s|", "AUDIO_FORMAT_DTS");
+                }
+                if (format == 12) {
+                    size += sprintf(aud_cap + size, "%s|", "AUDIO_FORMAT_TRUEHD");
+                }
+            }
+            /*check the channel cap */
+            else if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_CHANNELS)) {
+                //ALOGI("check channels\n");
+                if (/*format == 1 && */ch == 7) {
+                    size += sprintf(aud_cap + size, "%s|", "AUDIO_CHANNEL_OUT_5POINT1|AUDIO_CHANNEL_OUT_7POINT1");
+                } else if (/*format == 1 && */ch == 5) {
+                    size += sprintf(aud_cap + size, "%s|", "AUDIO_CHANNEL_OUT_5POINT1");
+                }
+            } else if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES)) {
+                ALOGI("check sample rate\n");
+                if (format == 1 && sr == 4) {
+                    size += sprintf(aud_cap + size, "%s|", "88200");
+                }
+                if (format == 1 && sr == 5) {
+                    size += sprintf(aud_cap + size, "%s|", "96000");
+                }
+                if (format == 1 && sr == 6) {
+                    size += sprintf(aud_cap + size, "%s|", "176400");
+                }
+                if (format == 1 && sr == 7) {
+                    size += sprintf(aud_cap + size, "%s|", "192000");
+                }
+            }
 
+        } else {
+            format = 0;
+            ch = 0;
+            sr = 0;
+        }
+    }
+    return aud_cap;
+fail:
+    if (aud_cap) {
+        free(aud_cap);
+    }
+    return NULL;
+}
 

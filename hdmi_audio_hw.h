@@ -34,7 +34,7 @@ enum {
     TYPE_DTS_HD_MA = 8,//should not used after we unify DTS-HD&DTS-HD MA
     TYPE_PCM_HIGH_SR = 9,
 };
-
+#define HDMI_ARC_MAX_FORMAT  20
 struct aml_audio_device {
     struct audio_hw_device hw_device;
     pthread_mutex_t lock;       /* see note below on mutex acquisition order */
@@ -48,6 +48,7 @@ struct aml_audio_device {
     struct echo_reference_itfe *echo_reference;
     bool hw_sync_mode;
     audio_hwsync_t  hwsync;
+    unsigned hdmi_arc_ad[HDMI_ARC_MAX_FORMAT];
 };
 
 struct aml_stream_out {
@@ -64,8 +65,9 @@ struct aml_stream_out {
     int last_codec_type;
     int format;
     uint64_t frame_write_sum;
-    uint64_t frame_skip_sum;	
+    uint64_t frame_skip_sum;
     audio_output_flags_t flags;
+    audio_devices_t out_device;
     uint64_t spdif_enc_init_frame_write_sum;
     uint64_t last_frames_postion;
     uint64_t bytes_write_total;
