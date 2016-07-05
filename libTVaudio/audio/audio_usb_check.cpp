@@ -98,15 +98,15 @@ static int SetAudioDelay(void) {
 
 static int running_flag = 0;
 void* android_check_threadloop(void *data __unused) {
-    running_flag = 1;
-    //ALOGI("Start thread loop for android check!\n");
+    ALOGI("Start thread loop for android audio check!\n");
+	prctl(PR_SET_NAME, (unsigned long)"aml_audio_check");
     while (running_flag) {
         android::GetStreamVolume();
         android::GetDeviceID();
         android::SetAudioDelay();
         usleep(100*1000);
     }
-    //ALOGI("Exit thread loop for android check!\n");
+    ALOGI("Exit thread loop for android audio check!\n");
     return ((void *) 0);
 }
 
@@ -121,6 +121,7 @@ extern "C" int creat_pthread_for_android_check
     //param.sched_priority = sched_get_priority_max(SCHED_RR);
     param.sched_priority = 50;
     pthread_attr_setschedparam(&attr, &param);
+	running_flag = 1;
     ret = pthread_create(android_check_ThreadID, &attr,
             &android_check_threadloop, NULL);
     pthread_attr_destroy(&attr);
@@ -128,7 +129,6 @@ extern "C" int creat_pthread_for_android_check
         ALOGE("%s, Create thread fail!\n", __FUNCTION__);
         return -1;
     }
-    prctl(PR_SET_NAME, (unsigned long)"aml_TV_check");
     //ALOGI("Creat thread ID: %u!\n", *android_check_ThreadID);
     return 0;
 }

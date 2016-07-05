@@ -1652,7 +1652,7 @@ static void* aml_audio_threadloop(void *data __unused) {
     gUSBCheckFlag = 0;
 
     gpAmlDevice->aml_Audio_ThreadExecFlag = 1;
-
+    prctl(PR_SET_NAME, (unsigned long)"aml_TV_audio");
     ret = aml_device_init(gpAmlDevice);
     if (ret < 0) {
         ALOGE("%s, Devices fail opened!\n", __FUNCTION__);
@@ -1825,7 +1825,6 @@ int aml_audio_open(unsigned int sr, int input_device, int output_device) {
         pthread_mutex_unlock(&amaudio_dev_op_mutex);
         return -1;
     }
-    prctl(PR_SET_NAME, (unsigned long)"aml_TV_audio");
 
     creat_pthread_for_android_check(&gpAmlDevice->android_check_ThreadID);
 
