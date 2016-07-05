@@ -956,8 +956,8 @@ static int do_output_standby(struct aml_stream_out *out)
 	 }
 	 if (adev->hwsync_output == out) {
 //here to check if hwsync in pause status,if that,chear the status
-//to release the sound card to other output stream
-             if (out->pause_status == true) {
+//to release the sound card to other active output stream
+             if (out->pause_status == true && adev->active_output_count > 0) {
                  if (pcm_is_ready(out->pcm)) {
                      int r = pcm_ioctl(out->pcm, SNDRV_PCM_IOCTL_PAUSE, 0);
                      if (r < 0) {
