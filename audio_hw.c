@@ -1528,6 +1528,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
             memset(out->tmp_buffer_8ch, 0, out_frames * frame_size * 8);
         }*/
         ret = pcm_write(out->pcm, out->tmp_buffer_8ch, out_frames * frame_size * 8);
+        out->frame_write_sum += out_frames;
     } else {
         if (out->hw_sync_mode) {
 
