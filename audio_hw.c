@@ -93,7 +93,7 @@ static unsigned int  DEFAULT_OUT_SAMPLING_RATE  = 48000;
 #define APTS_DISCONTINUE_THRESHOLD_MIN    (90000/1000*100)
 #define APTS_DISCONTINUE_THRESHOLD_MAX    (5*90000)
 
-#define MAX_STREAM_NUM   5 
+#define MAX_STREAM_NUM   5
 
 static const struct pcm_config pcm_config_out = {
     .channels = 2,
@@ -118,17 +118,20 @@ static const struct pcm_config pcm_config_bt = {
     .period_count = PLAYBACK_PERIOD_COUNT,
     .format = PCM_FORMAT_S16_LE,
 };
-#define AML_HAL_MIXER_BUF_SIZE  2*512*1024
+#define AML_HAL_MIXER_BUF_SIZE  64*1024
 struct aml_hal_mixer {
     unsigned char start_buf[AML_HAL_MIXER_BUF_SIZE];
     unsigned int wp;
     unsigned int rp;
     unsigned int buf_size;
+    unsigned char need_cache_flag;//flag to check if need cache some data before write to mix
+    pthread_mutex_t lock;
 };
 struct aml_audio_device {
     struct audio_hw_device hw_device;
 
     pthread_mutex_t lock;       /* see note below on mutex acquisition order */
+    pthread_mutex_t pcm_write_lock;
     int mode;
     audio_devices_t in_device;
     audio_devices_t out_device;
@@ -163,7 +166,7 @@ struct aml_stream_out {
     int write_threshold;
     bool low_power;
     uint64_t frame_write_sum;
-    uint64_t last_frames_postion;	
+    uint64_t last_frames_postion;
     uint8_t hw_sync_header[16];
     int hw_sync_header_cnt;
     int hw_sync_state;
@@ -230,85 +233,96 @@ static inline short CLIP(int r)
 //at the same,need do a software mixer in audio hal.
 static int aml_hal_mixer_init(struct aml_hal_mixer *mixer)
 {
+    pthread_mutex_lock(&mixer->lock);
     mixer->wp = 0;
     mixer->rp = 0;
     mixer->buf_size = AML_HAL_MIXER_BUF_SIZE;
+    mixer->need_cache_flag = 1;
+    pthread_mutex_unlock(&mixer->lock);
     return 0;
 }
-//need called by device mutux locked
 static int aml_hal_mixer_get_space(struct aml_hal_mixer *mixer)
 {
     unsigned space;
-    if (mixer->wp >= mixer->rp)
+    if (mixer->wp >= mixer->rp) {
         space = mixer->buf_size - (mixer->wp - mixer->rp);
-    else
+    } else {
         space = mixer->rp - mixer->wp;
-    return space > 64 ? (space-64):0;
+    }
+    return space > 64 ? (space - 64) : 0;
 }
 static int aml_hal_mixer_get_content(struct aml_hal_mixer *mixer)
 {
     unsigned content = 0;
-    if (mixer->wp >= mixer->rp)
+    pthread_mutex_lock(&mixer->lock);
+    if (mixer->wp >= mixer->rp) {
         content = mixer->wp - mixer->rp;
-    else
+    } else {
         content = mixer->wp - mixer->rp + mixer->buf_size;
+    }
     //ALOGI("wp %d,rp %d\n",mixer->wp,mixer->rp);
+    pthread_mutex_unlock(&mixer->lock);
     return content;
 }
 //we assue the cached size is always smaller then buffer size
 //need called by device mutux locked
-static int aml_hal_mixer_write(struct aml_hal_mixer *mixer,void *w_buf,int size)
+static int aml_hal_mixer_write(struct aml_hal_mixer *mixer, void *w_buf, int size)
 {
     unsigned space;
     unsigned write_size = size;
     unsigned tail = 0;
+    pthread_mutex_lock(&mixer->lock);
     space = aml_hal_mixer_get_space(mixer);
     if (space < size) {
-        ALOGI("write data no space,space %d,size %d,rp %d,wp %d,reset all ptr\n",space,size,mixer->rp,mixer->wp);
+        ALOGI("write data no space,space %d,size %d,rp %d,wp %d,reset all ptr\n", space, size, mixer->rp, mixer->wp);
         mixer->wp = 0;
         mixer->rp = 0;
     }
     //TODO
-    if (write_size > space)
+    if (write_size > space) {
         write_size = space;
+    }
     if (write_size + mixer->wp > mixer->buf_size) {
         tail = mixer->buf_size - mixer->wp;
-        memcpy(mixer->start_buf+mixer->wp,w_buf,tail);
+        memcpy(mixer->start_buf + mixer->wp, w_buf, tail);
         write_size -= tail;
-        memcpy(mixer->start_buf,(unsigned char*)w_buf+tail,write_size);
+        memcpy(mixer->start_buf, (unsigned char*)w_buf + tail, write_size);
         mixer->wp = write_size;
-    }
-    else {
-        memcpy(mixer->start_buf+mixer->wp,w_buf,write_size);
+    } else {
+        memcpy(mixer->start_buf + mixer->wp, w_buf, write_size);
         mixer->wp += write_size;
+        mixer->wp %= AML_HAL_MIXER_BUF_SIZE;
     }
+    pthread_mutex_unlock(&mixer->lock);
     return size;
 }
 //need called by device mutux locked
-static int aml_hal_mixer_read(struct aml_hal_mixer *mixer,void *r_buf,int size)
+static int aml_hal_mixer_read(struct aml_hal_mixer *mixer, void *r_buf, int size)
 {
     unsigned cached_size;
     unsigned read_size = size;
     unsigned tail = 0;
     cached_size = aml_hal_mixer_get_content(mixer);
+    pthread_mutex_lock(&mixer->lock);
     // we always assue we have enough data to read when hwsync enabled.
     // if we do not have,insert zero data.
     if (cached_size < size) {
-        ALOGI("read data has not enough data to mixer,read %d, have %d,rp %d,wp %d\n",size,cached_size,mixer->rp,mixer->wp);
-        memset((unsigned char*)r_buf+cached_size,0,size-cached_size);
+        ALOGI("read data has not enough data to mixer,read %d, have %d,rp %d,wp %d\n", size, cached_size, mixer->rp, mixer->wp);
+        memset((unsigned char*)r_buf + cached_size, 0, size - cached_size);
         read_size = cached_size;
     }
     if (read_size + mixer->rp > mixer->buf_size) {
         tail = mixer->buf_size - mixer->rp;
-        memcpy(r_buf,mixer->start_buf+mixer->rp,tail);
+        memcpy(r_buf, mixer->start_buf + mixer->rp, tail);
         read_size -= tail;
-        memcpy(mixer->start_buf,(unsigned char*)r_buf+tail,read_size);
+        memcpy((unsigned char*)r_buf + tail, mixer->start_buf, read_size);
         mixer->rp = read_size;
-    }
-    else {
-        memcpy(r_buf,mixer->start_buf+mixer->rp,read_size);
+    } else {
+        memcpy(r_buf, mixer->start_buf + mixer->rp, read_size);
         mixer->rp += read_size;
+        mixer->rp %= AML_HAL_MIXER_BUF_SIZE;
     }
+    pthread_mutex_unlock(&mixer->lock);
     return size;
 }
 // aml audio hal mixer code end
@@ -470,9 +484,9 @@ static void force_all_standby(struct aml_audio_device *adev)
 
     LOGFUNC("%s(%p)", __FUNCTION__, adev);
     int i = 0;
-    for (i = 0; i < MAX_STREAM_NUM;i++) {
-        out = 	adev->active_output[i];
-	  	
+    for (i = 0; i < MAX_STREAM_NUM; i++) {
+        out =   adev->active_output[i];
+
     }
     if (adev->active_output) {
         out = adev->active_output;
@@ -629,7 +643,7 @@ static int start_output_stream(struct aml_stream_out *out)
     unsigned int port = PORT_MM;
     int ret;
     int i  = 0;
-    struct aml_stream_out *out_removed = NULL;	
+    struct aml_stream_out *out_removed = NULL;
     LOGFUNC("%s(adev->out_device=%#x, adev->mode=%d)",
             __FUNCTION__, adev->out_device, adev->mode);
     if (adev->mode != AUDIO_MODE_IN_CALL) {
@@ -639,17 +653,17 @@ static int start_output_stream(struct aml_stream_out *out)
     if (out->hw_sync_mode == true) {
         adev->hwsync_output = out;
 #if 0
-    for (i = 0;i < MAX_STREAM_NUM;i++) {
-        if (adev->active_output[i]) {
-            out_removed = adev->active_output[i];
-            pthread_mutex_lock(&out_removed->lock);
-            if (!out_removed->standby) {
-                ALOGI("hwsync start,force %p standby\n",out_removed);
-                do_output_standby(out_removed);
+        for (i = 0; i < MAX_STREAM_NUM; i++) {
+            if (adev->active_output[i]) {
+                out_removed = adev->active_output[i];
+                pthread_mutex_lock(&out_removed->lock);
+                if (!out_removed->standby) {
+                    ALOGI("hwsync start,force %p standby\n", out_removed);
+                    do_output_standby(out_removed);
+                }
+                pthread_mutex_unlock(&out_removed->lock);
             }
-            pthread_mutex_unlock(&out_removed->lock);
         }
-    }
 #endif
     }
     card = get_aml_card();
@@ -667,12 +681,12 @@ static int start_output_stream(struct aml_stream_out *out)
     out->write_threshold = out->config.period_size * PLAYBACK_PERIOD_COUNT;
     out->config.start_threshold = out->config.period_size * PLAYBACK_PERIOD_COUNT;
     out->config.avail_min = 0;//SHORT_PERIOD_SIZE;
-//added by xujian for NTS hwsync/system stream mix smooth playback.
-//we need re-use the tinyalsa pcm handle by all the output stream, including
-//hwsync direct output stream,system mixer output stream.
-//TODO we need diff the code with AUDIO_DEVICE_OUT_ALL_SCO.
-//as it share the same hal but with the different card id.
-//TODO need reopen the tinyalsa card when sr/ch changed,
+    //added by xujian for NTS hwsync/system stream mix smooth playback.
+    //we need re-use the tinyalsa pcm handle by all the output stream, including
+    //hwsync direct output stream,system mixer output stream.
+    //TODO we need diff the code with AUDIO_DEVICE_OUT_ALL_SCO.
+    //as it share the same hal but with the different card id.
+    //TODO need reopen the tinyalsa card when sr/ch changed,
     if (adev->pcm == NULL) {
         out->pcm = pcm_open(card, port, PCM_OUT /*| PCM_MMAP | PCM_NOIRQ*/, &(out->config));
         if (!pcm_is_ready(out->pcm)) {
@@ -682,19 +696,19 @@ static int start_output_stream(struct aml_stream_out *out)
         }
         if (out->config.rate != out_get_sample_rate(&out->stream.common)) {
             LOGFUNC("%s(out->config.rate=%d, out->config.channels=%d)",
-            __FUNCTION__, out->config.rate, out->config.channels);
+                    __FUNCTION__, out->config.rate, out->config.channels);
             ret = create_resampler(out_get_sample_rate(&out->stream.common),
-                               out->config.rate,
-                               out->config.channels,
-                               RESAMPLER_QUALITY_DEFAULT,
-                               NULL,
-                               &out->resampler);
+                                   out->config.rate,
+                                   out->config.channels,
+                                   RESAMPLER_QUALITY_DEFAULT,
+                                   NULL,
+                                   &out->resampler);
             if (ret != 0) {
                 ALOGE("cannot create resampler for output");
                 return -ENOMEM;
             }
             out->buffer_frames = (out->config.period_size * out->config.rate) /
-                             out_get_sample_rate(&out->stream.common) + 1;
+                                 out_get_sample_rate(&out->stream.common) + 1;
             out->buffer = malloc(pcm_frames_to_bytes(out->pcm, out->buffer_frames));
             if (out->buffer == NULL) {
                 ALOGE("cannot malloc memory for out->buffer");
@@ -702,10 +716,9 @@ static int start_output_stream(struct aml_stream_out *out)
             }
         }
         adev->pcm = out->pcm;
-        ALOGI("device pcm %p\n",adev->pcm);
-    }
-    else {
-        ALOGI("stream %p share the pcm %p\n",out,adev->pcm);
+        ALOGI("device pcm %p\n", adev->pcm);
+    } else {
+        ALOGI("stream %p share the pcm %p\n", out, adev->pcm);
         out->pcm = adev->pcm;
     }
     LOGFUNC("channels=%d---format=%d---period_count%d---period_size%d---rate=%d---",
@@ -723,18 +736,19 @@ static int start_output_stream(struct aml_stream_out *out)
     }
     //set_codec_type(0);
     if (out->hw_sync_mode == 1) {
-        LOGFUNC("start_output_stream with hw sync enable %p\n",out);
+        LOGFUNC("start_output_stream with hw sync enable %p\n", out);
     }
-    for (i = 0;i < MAX_STREAM_NUM;i++) {
+    for (i = 0; i < MAX_STREAM_NUM; i++) {
         if (adev->active_output[i] == NULL) {
-            ALOGI("store out (%p) to index %d\n",out,i);
+            ALOGI("store out (%p) to index %d\n", out, i);
             adev->active_output[i] = out;
             adev->active_output_count++;
             break;
-        }		
+        }
     }
-    if (i == MAX_STREAM_NUM)
-        ALOGE("error,no space to store the dev stream \n");	
+    if (i == MAX_STREAM_NUM) {
+        ALOGE("error,no space to store the dev stream \n");
+    }
     return 0;
 }
 
@@ -767,7 +781,7 @@ static int check_input_parameters(uint32_t sample_rate, audio_format_t format, i
     return 0;
 }
 
-static size_t get_input_buffer_size(unsigned int period_size,uint32_t sample_rate, audio_format_t format, int channel_count)
+static size_t get_input_buffer_size(unsigned int period_size, uint32_t sample_rate, audio_format_t format, int channel_count)
 {
     size_t size;
 
@@ -814,10 +828,10 @@ static void put_echo_reference(struct aml_audio_device *adev,
                                struct echo_reference_itfe *reference)
 {
     if (adev->echo_reference != NULL &&
-        reference == adev->echo_reference) {      
+        reference == adev->echo_reference) {
         if (adev->active_output[0] != NULL) {
             remove_echo_reference(adev->active_output[0], reference);
-        }	
+        }
         release_echo_reference(reference);
         adev->echo_reference = NULL;
     }
@@ -925,9 +939,9 @@ static int do_output_standby(struct aml_stream_out *out)
 {
     struct aml_audio_device *adev = out->dev;
     int i = 0;
-    	
+
     LOGFUNC("%s(%p)", __FUNCTION__, out);
-    
+
     if (!out->standby) {
         //commit here for hwsync/mix stream hal mixer
         //pcm_close(out->pcm);
@@ -946,43 +960,47 @@ static int do_output_standby(struct aml_stream_out *out)
             out->echo_reference = NULL;
         }
         out->standby = 1;
-	 for (i  = 0; i < MAX_STREAM_NUM;i++) {
-	 	if (adev->active_output[i] == out) {
-			adev->active_output[i]  = NULL;
-			adev->active_output_count--;
-			ALOGI("remove out (%p) from index %d\n",out,i);	
-			break;
-	 	}
-	 }
-	 if (adev->hwsync_output == out) {
-//here to check if hwsync in pause status,if that,chear the status
-//to release the sound card to other active output stream
-             if (out->pause_status == true && adev->active_output_count > 0) {
-                 if (pcm_is_ready(out->pcm)) {
-                     int r = pcm_ioctl(out->pcm, SNDRV_PCM_IOCTL_PAUSE, 0);
-                     if (r < 0) {
-                         ALOGE("here cannot resume channel\n");
-                     } else {
-                         r = 0;
-                     }
-                     ALOGI("clear the hwsync output pause status.rusume pcm\n");
-                 }
-                 out->pause_status = false;
-             }
-             adev->hwsync_output = NULL;
-	 }
-         if (i == MAX_STREAM_NUM) {
-             ALOGE("error, not found stream in dev stream list\n");
-         }
-	 /* no active output here,we can close the pcm to release the sound card now*/
-	 if (adev->active_output_count == 0) {
-	     if (adev->pcm) {
-                 ALOGI("close pcm %p\n",adev->pcm);
-                 pcm_close(adev->pcm);
-                 adev->pcm = NULL;
-             }
-             out->pause_status = false;
-         }
+        for (i  = 0; i < MAX_STREAM_NUM; i++) {
+            if (adev->active_output[i] == out) {
+                adev->active_output[i]  = NULL;
+                adev->active_output_count--;
+                ALOGI("remove out (%p) from index %d\n", out, i);
+                break;
+            }
+        }
+        if (out->hw_sync_mode == 1 || adev->hwsync_output == out) {
+#if 0
+            //here to check if hwsync in pause status,if that,chear the status
+            //to release the sound card to other active output stream
+            if (out->pause_status == true && adev->active_output_count > 0) {
+                if (pcm_is_ready(out->pcm)) {
+                    int r = pcm_ioctl(out->pcm, SNDRV_PCM_IOCTL_PAUSE, 0);
+                    if (r < 0) {
+                        ALOGE("here cannot resume channel\n");
+                    } else {
+                        r = 0;
+                    }
+                    ALOGI("clear the hwsync output pause status.resume pcm\n");
+                }
+                out->pause_status = false;
+            }
+#endif
+            out->pause_status = false;
+            adev->hwsync_output = NULL;
+            ALOGI("clear hwsync_output when hwsync standby\n");
+        }
+        if (i == MAX_STREAM_NUM) {
+            ALOGE("error, not found stream in dev stream list\n");
+        }
+        /* no active output here,we can close the pcm to release the sound card now*/
+        if (adev->active_output_count == 0) {
+            if (adev->pcm) {
+                ALOGI("close pcm %p\n", adev->pcm);
+                pcm_close(adev->pcm);
+                adev->pcm = NULL;
+            }
+            out->pause_status = false;
+        }
     }
     return 0;
 }
@@ -1096,7 +1114,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
         if (frame_size > 0) {
             struct pcm_config *config = &out->config;
             ALOGI("audio hw frame size change from %d to %d \n", config->period_size, frame_size);
-	    config->period_size =  frame_size;
+            config->period_size =  frame_size;
             pthread_mutex_lock(&adev->lock);
             pthread_mutex_lock(&out->lock);
             if (!out->standby) {
@@ -1179,16 +1197,16 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
         int hw_sync_id = atoi(value);
         unsigned char sync_enable = (hw_sync_id == 12345678) ? 1 : 0;
         ALOGI("(%p)set hw_sync_id %d,%s hw sync mode\n",
-			out,hw_sync_id, sync_enable ? "enable" : "disable");
+              out, hw_sync_id, sync_enable ? "enable" : "disable");
         out->hw_sync_mode = sync_enable;
-	    out->first_apts_flag = false;
+        out->first_apts_flag = false;
         pthread_mutex_lock(&adev->lock);
         pthread_mutex_lock(&out->lock);
         out->frame_write_sum = 0;
         out->last_frames_postion = 0;
-/* clear up previous playback output status */
+        /* clear up previous playback output status */
         if (!out->standby) {
-            do_output_standby (out);
+            do_output_standby(out);
         }
         //adev->hwsync_output = sync_enable?out:NULL;
         if (sync_enable) {
@@ -1197,7 +1215,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
         }
         pthread_mutex_unlock(&out->lock);
         pthread_mutex_unlock(&adev->lock);
-		ret = 0;
+        ret = 0;
         goto exit;
     }
 exit:
@@ -1237,7 +1255,7 @@ static int out_set_volume(struct audio_stream_out *stream, float left, float rig
 
 static int out_pause(struct audio_stream_out *stream)
 {
-    LOGFUNC("out_pause(%p)\n",stream);
+    LOGFUNC("out_pause(%p)\n", stream);
 
     struct aml_stream_out *out = (struct aml_stream_out *) stream;
     struct aml_audio_device *adev = out->dev;
@@ -1247,6 +1265,13 @@ static int out_pause(struct audio_stream_out *stream)
     if (out->standby || out->pause_status == true) {
         goto exit;
     }
+    if (out->hw_sync_mode) {
+        adev->hwsync_output = NULL;
+        if (adev->active_output_count > 1) {
+            ALOGI("more than one active stream,skip alsa hw pause\n");
+            goto exit1;
+        }
+    }
     if (pcm_is_ready(out->pcm)) {
         r = pcm_ioctl(out->pcm, SNDRV_PCM_IOCTL_PAUSE, 1);
         if (r < 0) {
@@ -1255,7 +1280,7 @@ static int out_pause(struct audio_stream_out *stream)
             r = 0;
         }
     }
-
+exit1:
     if (out->hw_sync_mode) {
         sysfs_set_sysfs_str(TSYNC_EVENT, "AUDIO_PAUSE");
     }
@@ -1268,7 +1293,7 @@ exit:
 
 static int out_resume(struct audio_stream_out *stream)
 {
-    LOGFUNC("out_resume (%p)\n",stream);
+    LOGFUNC("out_resume (%p)\n", stream);
     struct aml_stream_out *out = (struct aml_stream_out *) stream;
     struct aml_audio_device *adev = out->dev;
     int r = 0;
@@ -1286,6 +1311,9 @@ static int out_resume(struct audio_stream_out *stream)
         }
     }
     if (out->hw_sync_mode) {
+        ALOGI("init hal mixer when hwsync resume\n");
+        adev->hwsync_output = out;
+        aml_hal_mixer_init(&adev->hal_mixer);
         sysfs_set_sysfs_str(TSYNC_EVENT, "AUDIO_RESUME");
     }
     out->pause_status = false;
@@ -1346,29 +1374,45 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
     int need_mix = 0;
     short *mix_buf = NULL;
     unsigned char enable_dump = getprop_bool("media.audiohal.outdump");
+    // limit HAL mixer buffer level within 200ms
+    while ((adev->hwsync_output != NULL && adev->hwsync_output != out) &&
+           (aml_hal_mixer_get_content(&adev->hal_mixer) > 200 * 48 * 4)) {
+        usleep(20000);
+    }
     /* acquiring hw device mutex systematically is useful if a low priority thread is waiting
      * on the output stream mutex - e.g. executing select_mode() while holding the hw device
      * mutex
      */
     pthread_mutex_lock(&adev->lock);
     pthread_mutex_lock(&out->lock);
-	//here to check whether hwsync out stream and other stream are enabled at the same time.
-	//if that we need do the hal mixer of the two out stream.
-	if (out->hw_sync_mode == 1) {
-	    int content_size = aml_hal_mixer_get_content(&adev->hal_mixer);
-		//ALOGI("content_size %d\n",content_size);
+    //here to check whether hwsync out stream and other stream are enabled at the same time.
+    //if that we need do the hal mixer of the two out stream.
+    if (out->hw_sync_mode == 1) {
+        int content_size = aml_hal_mixer_get_content(&adev->hal_mixer);
+        //ALOGI("content_size %d\n",content_size);
         if (content_size > 0) {
-		    //ALOGI("need do hal mixer\n");
-		    need_mix = 1;
-		}
-	}
+            if (adev->hal_mixer.need_cache_flag == 0)   {
+                //ALOGI("need do hal mixer\n");
+                need_mix = 1;
+            } else if (content_size < 80 * 48 * 4) { //80 ms
+                //ALOGI("hal mixed cached size %d\n", content_size);
+            } else {
+                ALOGI("start enable mix,cached size %d\n", content_size);
+                adev->hal_mixer.need_cache_flag = 0;
+            }
+
+        } else {
+            //  ALOGI("content size %d,duration %d ms\n",content_size,content_size/48/4);
+        }
+    }
     /* if hwsync output stream are enabled,write  other output to a mixe buffer and sleep for the pcm duration time  */
     if (adev->hwsync_output != NULL && adev->hwsync_output != out) {
         //ALOGI("dev hwsync enable,hwsync %p) cur (%p),size %d\n",adev->hwsync_output,out,bytes);
         //      out->frame_write_sum += in_frames;
 #if 0
-        if (!out->standby)
+        if (!out->standby) {
             do_output_standby(out);
+        }
 #endif
         if (out->standby) {
             ret = start_output_stream(out);
@@ -1380,14 +1424,14 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
             out->standby = false;
         }
         ret = -1;
-        aml_hal_mixer_write(&adev->hal_mixer,buffer,bytes);
+        aml_hal_mixer_write(&adev->hal_mixer, buffer, bytes);
         pthread_mutex_unlock(&adev->lock);
         goto exit;
     }
     if (out->pause_status == true) {
         pthread_mutex_unlock(&adev->lock);
         pthread_mutex_unlock(&out->lock);
-        ALOGI("call out_write when pause status (%p)\n",stream);
+        ALOGI("call out_write when pause status (%p)\n", stream);
         return 0;
     }
     if ((out->standby) && (out->hw_sync_mode == 1)) {
@@ -1416,7 +1460,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
             uint8_t *p = (uint8_t *)buffer;
             while (i < bytes) {
                 if (hwsync_header_valid(p)) {
-                    ALOGI("HWSYNC resync.%p",out);
+                    ALOGI("HWSYNC resync.%p", out);
                     out->hw_sync_state = HW_SYNC_STATE_HEADER;
                     out->hw_sync_header_cnt = 0;
                     out->first_apts_flag = false;
@@ -1433,7 +1477,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
             }
 
             if (out->hw_sync_state == HW_SYNC_STATE_RESYNC) {
-                ALOGI("Keep searching for HWSYNC header.%p",out);
+                ALOGI("Keep searching for HWSYNC header.%p", out);
                 pthread_mutex_unlock(&adev->lock);
                 goto exit;
             }
@@ -1616,32 +1660,36 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
                                     once_write_size = insert_size > 8192 ? 8192 : insert_size;
                                     if (need_mix) {
                                         pthread_mutex_lock(&adev->lock);
-                                        aml_hal_mixer_read(&adev->hal_mixer,mix_buf,once_write_size);
+                                        aml_hal_mixer_read(&adev->hal_mixer, mix_buf, once_write_size);
                                         pthread_mutex_unlock(&adev->lock);
-                                        memcpy(insert_buf,mix_buf,once_write_size);
-                                     }
+                                        memcpy(insert_buf, mix_buf, once_write_size);
+                                    }
 #if 1
-                                     if (enable_dump) {
-                                         FILE *fp1 = fopen("/data/tmp/i2s_audio_out.pcm", "a+");
-                                         if (fp1) {
-                                             int flen = fwrite((char *)insert_buf, 1, once_write_size, fp1);
-                                             fclose(fp1);
-                                         }
-				     }
+                                    if (enable_dump) {
+                                        FILE *fp1 = fopen("/data/tmp/i2s_audio_out.pcm", "a+");
+                                        if (fp1) {
+                                            int flen = fwrite((char *)insert_buf, 1, once_write_size, fp1);
+                                            fclose(fp1);
+                                        }
+                                    }
 #endif
+                                    pthread_mutex_lock(&adev->pcm_write_lock);
                                     ret = pcm_write(out->pcm, (void *) insert_buf, once_write_size);
+                                    pthread_mutex_unlock(&adev->pcm_write_lock);
                                     if (ret != 0) {
                                         ALOGE("pcm write failed\n");
                                         free(insert_buf);
-                                        if (mix_buf)
+                                        if (mix_buf) {
                                             free(mix_buf);
+                                        }
                                         pthread_mutex_unlock(&adev->lock);
                                         goto exit;
                                     }
                                     insert_size -= once_write_size;
                                 }
-                                if (mix_buf)
+                                if (mix_buf) {
                                     free(mix_buf);
+                                }
                                 mix_buf = NULL;
                                 free(insert_buf);
                                 // insert end
@@ -1715,23 +1763,23 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
                             if (need_mix) {
                                 short mix_buf[32];
                                 pthread_mutex_lock(&adev->lock);
-                                aml_hal_mixer_read(&adev->hal_mixer,mix_buf,64);
+                                aml_hal_mixer_read(&adev->hal_mixer, mix_buf, 64);
                                 pthread_mutex_unlock(&adev->lock);
 
-                                for (i = 0;i < 64/2/2;i++) {
+                                for (i = 0; i < 64 / 2 / 2; i++) {
                                     int r;
-                                    r = w_buf[2*i] * out->volume_l + mix_buf[2*i];
-                                    w_buf[2*i] = CLIP(r);
-                                    r = w_buf[2*i+1] * out->volume_r + mix_buf[2*i+1];
-                                    w_buf[2*i+1] = CLIP(r);
+                                    r = w_buf[2 * i] * out->volume_l + mix_buf[2 * i];
+                                    w_buf[2 * i] = CLIP(r);
+                                    r = w_buf[2 * i + 1] * out->volume_r + mix_buf[2 * i + 1];
+                                    w_buf[2 * i + 1] = CLIP(r);
                                 }
                             } else {
-                                for (i = 0;i < 64/2/2;i++) {
+                                for (i = 0; i < 64 / 2 / 2; i++) {
                                     int r;
-                                    r = w_buf[2*i] * out->volume_l;
-                                    w_buf[2*i] = CLIP(r);
-                                    r = w_buf[2*i+1] * out->volume_r;
-                                    w_buf[2*i+1] = CLIP(r);
+                                    r = w_buf[2 * i] * out->volume_l;
+                                    w_buf[2 * i] = CLIP(r);
+                                    r = w_buf[2 * i + 1] * out->volume_r;
+                                    w_buf[2 * i + 1] = CLIP(r);
                                 }
                             }
 #if 1
@@ -1743,7 +1791,9 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
                                 }
                             }
 #endif
+                            pthread_mutex_lock(&adev->pcm_write_lock);
                             ret = pcm_write(out->pcm, w_buf, 64);
+                            pthread_mutex_unlock(&adev->pcm_write_lock);
                             out->frame_write_sum += 64 / frame_size;
                             out->hw_sync_body_cnt -= 64 - out->body_align_cnt;
                             out->body_align_cnt = 0;
@@ -1761,41 +1811,43 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
                         short *w_buf = (short*)p;
                         mix_buf = (short *)malloc(m - align);
                         if (mix_buf == NULL) {
-                            ALOGE("!!!fatal err,malloc %d bytes fail\n",m - align);
-							ret = -1;
-							goto exit;
-						}
+                            ALOGE("!!!fatal err,malloc %d bytes fail\n", m - align);
+                            ret = -1;
+                            goto exit;
+                        }
                         if (need_mix) {
                             pthread_mutex_lock(&adev->lock);
-                            aml_hal_mixer_read(&adev->hal_mixer,mix_buf,m - align);
+                            aml_hal_mixer_read(&adev->hal_mixer, mix_buf, m - align);
                             pthread_mutex_unlock(&adev->lock);
-                            for (i = 0;i < (m - align)/2/2;i++) {
+                            for (i = 0; i < (m - align) / 2 / 2; i++) {
                                 int r;
-                                r = w_buf[2*i] * out->volume_l + mix_buf[2*i];
-                                mix_buf[2*i] = CLIP(r);
-                                r = w_buf[2*i+1] * out->volume_r + mix_buf[2*i+1];
-                                mix_buf[2*i+1] = CLIP(r);
+                                r = w_buf[2 * i] * out->volume_l + mix_buf[2 * i];
+                                mix_buf[2 * i] = CLIP(r);
+                                r = w_buf[2 * i + 1] * out->volume_r + mix_buf[2 * i + 1];
+                                mix_buf[2 * i + 1] = CLIP(r);
                             }
                         } else {
-                            for (i = 0;i < (m - align)/2/2;i++) {
+                            for (i = 0; i < (m - align) / 2 / 2; i++) {
 
                                 int r;
-                                r = w_buf[2*i] * out->volume_l;
-                                mix_buf[2*i] = CLIP(r);
-                                r = w_buf[2*i+1] * out->volume_r;
-                                mix_buf[2*i+1] = CLIP(r);
+                                r = w_buf[2 * i] * out->volume_l;
+                                mix_buf[2 * i] = CLIP(r);
+                                r = w_buf[2 * i + 1] * out->volume_r;
+                                mix_buf[2 * i + 1] = CLIP(r);
                             }
                         }
 #if 1
                         if (enable_dump) {
                             FILE *fp1 = fopen("/data/tmp/i2s_audio_out.pcm", "a+");
                             if (fp1) {
-                               int flen = fwrite((char *)mix_buf, 1, m - align, fp1);
-                               fclose(fp1);
+                                int flen = fwrite((char *)mix_buf, 1, m - align, fp1);
+                                fclose(fp1);
                             }
                         }
 #endif
+                        pthread_mutex_lock(&adev->pcm_write_lock);
                         ret = pcm_write(out->pcm, mix_buf, m - align);
+                        pthread_mutex_unlock(&adev->pcm_write_lock);
                         free(mix_buf);
                         out->frame_write_sum += (m - align) / frame_size;
 
@@ -1829,21 +1881,36 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
             }
 
         } else {
+            struct aml_hal_mixer *mixer = &adev->hal_mixer;
+            pthread_mutex_lock(&adev->pcm_write_lock);
+            if (aml_hal_mixer_get_content(mixer) > 0) {
+                pthread_mutex_lock(&mixer->lock);
+                if (mixer->wp > mixer->rp) {
+                    pcm_write(out->pcm, mixer->start_buf + mixer->rp, mixer->wp - mixer->rp);
+                } else {
+                    pcm_write(out->pcm, mixer->start_buf + mixer->wp, mixer->buf_size - mixer->rp);
+                    pcm_write(out->pcm, mixer->start_buf, mixer->wp);
+                }
+                mixer->rp = mixer->wp = 0;
+                pthread_mutex_unlock(&mixer->lock);
+            }
             ret = pcm_write(out->pcm, in_buffer, out_frames * frame_size);
+            pthread_mutex_unlock(&adev->pcm_write_lock);
             out->frame_write_sum += out_frames;
         }
     }
 
 exit:
-     latency_frames = out_get_latency(out) * out->config.rate / 1000;
-     if (out->frame_write_sum>= latency_frames)
-	 	out->last_frames_postion = out->frame_write_sum - latency_frames;
-     else
-	 	out->last_frames_postion = out->frame_write_sum;	
+    latency_frames = out_get_latency(out) * out->config.rate / 1000;
+    if (out->frame_write_sum >= latency_frames) {
+        out->last_frames_postion = out->frame_write_sum - latency_frames;
+    } else {
+        out->last_frames_postion = out->frame_write_sum;
+    }
     pthread_mutex_unlock(&out->lock);
     if (ret != 0) {
         usleep(bytes * 1000000 / audio_stream_out_frame_size(stream) /
-               out_get_sample_rate(&stream->common)*15/16);
+               out_get_sample_rate(&stream->common) * 15 / 16);
     }
 
     if (force_input_standby) {
@@ -1978,7 +2045,7 @@ static size_t in_get_buffer_size(const struct audio_stream *stream)
 {
     struct aml_stream_in *in = (struct aml_stream_in *)stream;
 
-    return get_input_buffer_size(in->config.period_size,in->config.rate,
+    return get_input_buffer_size(in->config.period_size, in->config.rate,
                                  AUDIO_FORMAT_PCM_16_BIT,
                                  in->config.channels);
 }
@@ -2650,7 +2717,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     out->frame_write_sum = 0;
     out->hw_sync_mode = false;
     out->first_apts_flag = false;
-	ALOGI("adev_open_output_stream stream %p,flag %d\n",out,flags);
+    ALOGI("adev_open_output_stream stream %p,flag %d\n", out, flags);
     if (0/*flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC*/) {
         out->hw_sync_mode = true;
         ALOGI("Output stream open with AUDIO_OUTPUT_FLAG_HW_AV_SYNC");
@@ -2747,8 +2814,10 @@ static void adev_close_output_stream(struct audio_hw_device *dev,
         free(out->audioeffect_tmp_buffer);
     }
     out_standby(&stream->common);
-    if (adev->hwsync_output == out)
+    if (adev->hwsync_output == out) {
+        ALOGI("clear hwsync output when close stream\n");
         adev->hwsync_output = NULL;
+    }
     free(stream);
 }
 
@@ -2861,7 +2930,7 @@ static size_t adev_get_input_buffer_size(const struct audio_hw_device *dev,
         return 0;
     }
 
-    return get_input_buffer_size(config->frame_count,config->sample_rate,
+    return get_input_buffer_size(config->frame_count, config->sample_rate,
                                  config->format, channel_count);
 
 }
