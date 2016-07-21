@@ -460,7 +460,9 @@ out_standby(struct audio_stream *stream)
     status = do_output_standby(out);
     set_codec_type(TYPE_PCM);
 /* clear the hdmitx channel config to default */
-    sysfs_set_sysfs_str("/sys/class/amhdmitx/amhdmitx0/aud_output_chs", "0:0");
+    if (out->multich == 6) {
+        sysfs_set_sysfs_str("/sys/class/amhdmitx/amhdmitx0/aud_output_chs", "0:0");
+    }
     if (out->format != AUDIO_FORMAT_DTS_HD)
         set_codec_type(TYPE_PCM);
     pthread_mutex_unlock(&out->lock);
