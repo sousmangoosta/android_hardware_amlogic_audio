@@ -160,6 +160,7 @@ struct aml_stream_out {
     struct resampler_itfe *resampler;
     char *buffer;
     size_t buffer_frames;
+    unsigned int hal_rate;
     bool standby;
     struct echo_reference_itfe *echo_reference;
     struct aml_audio_device *dev;
@@ -644,8 +645,11 @@ static int start_output_stream(struct aml_stream_out *out)
     int ret;
     int i  = 0;
     struct aml_stream_out *out_removed = NULL;
-    LOGFUNC("%s(adev->out_device=%#x, adev->mode=%d)",
-            __FUNCTION__, adev->out_device, adev->mode);
+
+    LOGFUNC("%s(adev->out_device=%#x, adev->mode=%d sample rate=%d)",
+            __FUNCTION__, adev->out_device, adev->mode,
+            out->config.rate);
+
     if (adev->mode != AUDIO_MODE_IN_CALL) {
         /* FIXME: only works if only one output can be active at a time */
         select_devices(adev);
@@ -694,11 +698,12 @@ static int start_output_stream(struct aml_stream_out *out)
             pcm_close(out->pcm);
             return -ENOMEM;
         }
-        if (out->config.rate != out_get_sample_rate(&out->stream.common)) {
-            LOGFUNC("%s(out->config.rate=%d, out->config.channels=%d)",
-                    __FUNCTION__, out->config.rate, out->config.channels);
-            ret = create_resampler(out_get_sample_rate(&out->stream.common),
-                                   out->config.rate,
+
+        if (out->hal_rate != out_get_sample_rate(&out->stream.common)) {
+            LOGFUNC("%s(out->hal=%d, out->config.rate=%d, out->config.channels=%d)",
+                __FUNCTION__, out->hal_rate, out->config.rate, out->config.channels);
+            ret = create_resampler(out->hal_rate,
+                                   out_get_sample_rate(&out->stream.common),
                                    out->config.channels,
                                    RESAMPLER_QUALITY_DEFAULT,
                                    NULL,
@@ -707,7 +712,7 @@ static int start_output_stream(struct aml_stream_out *out)
                 ALOGE("cannot create resampler for output");
                 return -ENOMEM;
             }
-            out->buffer_frames = (out->config.period_size * out->config.rate) /
+            out->buffer_frames = (out->config.period_size * out->hal_rate) /
                                  out_get_sample_rate(&out->stream.common) + 1;
             out->buffer = malloc(pcm_frames_to_bytes(out->pcm, out->buffer_frames));
             if (out->buffer == NULL) {
@@ -1516,7 +1521,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
     }
 #endif
     /* only use resampler if required */
-    if (out->config.rate != out_get_sample_rate(&stream->common)) {
+    if (out->hal_rate != out_get_sample_rate(&stream->common)) {
         out_frames = out->buffer_frames;
         out->resampler->resample_from_input(out->resampler,
                                             in_buffer, &in_frames,
@@ -1547,11 +1552,13 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
     }
 #endif
 #if 1
-    codec_type = get_sysfs_int("/sys/class/audiodsp/digital_codec");
-    samesource_flag = get_sysfs_int("/sys/class/audiodsp/audio_samesource");
-    if (samesource_flag == 0 && codec_type == 0) {
-        ALOGI("to enable same source,need reset alsa,type %d,same source flag %d \n", codec_type, samesource_flag);
-        pcm_stop(out->pcm);
+    if (!(adev->out_device & AUDIO_DEVICE_OUT_ALL_SCO)) {
+        codec_type = get_sysfs_int("/sys/class/audiodsp/digital_codec");
+        samesource_flag = get_sysfs_int("/sys/class/audiodsp/audio_samesource");
+        if (samesource_flag == 0 && codec_type == 0) {
+            ALOGI("to enable same source,need reset alsa,type %d,same source flag %d \n", codec_type, samesource_flag);
+            pcm_stop(out->pcm);
+        }
     }
 #endif
     if (out->is_tv_platform == 1) {
@@ -2679,7 +2686,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     int channel_count = popcount(config->channel_mask);
     int ret;
 
-    LOGFUNC("**enter %s(devices=0x%04x,format=%d, ch=0x%04x, SR=%d, flags=0x%x)", __FUNCTION__, devices,
+    LOGFUNC("**enter %s(devices=0x%04x,format=%d, ch=0x%04x, (requested)SR=%d, flags=0x%x)", __FUNCTION__, devices,
             config->format, config->channel_mask, config->sample_rate, flags);
 
     out = (struct aml_stream_out *)calloc(1, sizeof(struct aml_stream_out));
@@ -2731,6 +2738,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
        * guaranteed to be called after an output stream is opened.
        */
 
+    out->hal_rate = out->config.rate;
     config->format = out_get_format(&out->stream.common);
     config->channel_mask = out_get_channels(&out->stream.common);
     config->sample_rate = out_get_sample_rate(&out->stream.common);
