@@ -654,9 +654,9 @@ out_get_parameters(const struct audio_stream *stream, const char *keys)
     ALOGI("out_get_parameters %s,out %p\n", keys, out);
     if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES)) {
         if (out->out_device & AUDIO_DEVICE_OUT_HDMI_ARC) {
-            cap = get_hdmi_arc_cap(adev->hdmi_arc_ad, HDMI_ARC_MAX_FORMAT, AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES);
+            cap = (char *)get_hdmi_arc_cap(adev->hdmi_arc_ad, HDMI_ARC_MAX_FORMAT, AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES);
         } else {
-            cap = get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES);
+            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES);
         }
         if (cap) {
             para = strdup(cap);
@@ -668,9 +668,9 @@ out_get_parameters(const struct audio_stream *stream, const char *keys)
         return para;
     } else if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_CHANNELS)) {
         if (out->out_device & AUDIO_DEVICE_OUT_HDMI_ARC) {
-            cap = get_hdmi_arc_cap(adev->hdmi_arc_ad, HDMI_ARC_MAX_FORMAT, AUDIO_PARAMETER_STREAM_SUP_CHANNELS);
+            cap = (char *)get_hdmi_arc_cap(adev->hdmi_arc_ad, HDMI_ARC_MAX_FORMAT, AUDIO_PARAMETER_STREAM_SUP_CHANNELS);
         } else {
-            cap = get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_CHANNELS);
+            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_CHANNELS);
         }
         if (cap) {
             para = strdup(cap);
@@ -682,9 +682,9 @@ out_get_parameters(const struct audio_stream *stream, const char *keys)
         return para;
     } else if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_FORMATS)) {
         if (out->out_device & AUDIO_DEVICE_OUT_HDMI_ARC) {
-            cap = get_hdmi_arc_cap(adev->hdmi_arc_ad, HDMI_ARC_MAX_FORMAT, AUDIO_PARAMETER_STREAM_SUP_FORMATS);
+            cap = (char *)get_hdmi_arc_cap(adev->hdmi_arc_ad, HDMI_ARC_MAX_FORMAT, AUDIO_PARAMETER_STREAM_SUP_FORMATS);
         } else {
-            cap = get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_FORMATS);
+            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_FORMATS);
         }
         if (cap) {
             para = strdup(cap);
