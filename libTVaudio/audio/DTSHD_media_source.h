@@ -1,14 +1,13 @@
 #ifndef MEDIA_DTSHD_MEDIASOURCE_H_
 #define MEDIA_DTSHD_MEDIASOURCE_H_
 
-#include  "MediaSource.h"
-#include  "DataSource.h"
-#include  "MediaBufferGroup.h"
-#include  "MetaData.h"
-#include  "OMXCodec.h"
-#include  "OMX_Index.h"
-#include  "OMX_Core.h"
-#include  "OMXClient.h"
+#include  <MediaSource.h>
+#include  <DataSource.h>
+#include  <MediaBufferGroup.h>
+#include  <MetaData.h>
+#include  <OMX_Index.h>
+#include  <OMX_Core.h>
+#include  <OMXClient.h>
 namespace android
 {
 

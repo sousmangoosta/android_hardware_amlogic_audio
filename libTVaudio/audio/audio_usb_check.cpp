@@ -1,3 +1,5 @@
+#define LOG_TAG "aml_audio"
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -11,8 +13,6 @@
 
 #include "audio_usb_check.h"
 #include "aml_audio.h"
-
-#define LOG_TAG "aml_audio"
 
 namespace android {
 

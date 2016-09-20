@@ -1,3 +1,5 @@
+#define LOG_TAG "DDP_Media_Source"
+
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -23,6 +25,7 @@
 #endif
 // code end
 #endif
+#include <media/stagefright/SimpleDecodingSource.h>
 
 #include "DDP_media_source.h"
 #include "aml_audio.h"
@@ -32,7 +35,6 @@ extern struct circle_buffer DD_out_buffer;
 extern int spdif_audio_type;
 namespace android {
 
-#define LOG_TAG "DDP_Media_Source"
 
 #ifdef USE_SYS_WRITE_SERVICE
 //code here for system write service
@@ -42,7 +44,7 @@ class DeathNotifier: public IBinder::DeathRecipient
         DeathNotifier() {
         }
 
-        void binderDied(const wp<IBinder>& who) {
+        void binderDied(__unused const wp<IBinder>& who) {
             ALOGW("system_write died!");
         }
 };
@@ -128,7 +130,7 @@ static DDPerr ddbs_unprj(DDP_BSTRM *p_bstrm, DDPshort *p_data,  DDPshort numbits
 static int Get_DD_Parameters(void *buf, int *sample_rate, int *frame_size, int *ChNum)
 {
     int numch=0;
-    DDP_BSTRM bstrm={0};
+    DDP_BSTRM bstrm={NULL, 0, 0};
     DDP_BSTRM *p_bstrm=&bstrm;
     short tmp=0,acmod,lfeon,fscod,frmsizecod;
     ddbs_init((short*)buf,0,p_bstrm);
@@ -204,7 +206,7 @@ static int Get_DD_Parameters(void *buf, int *sample_rate, int *frame_size, int *
 static int Get_DDP_Parameters(void *buf, int *sample_rate, int *frame_size,int *ChNum)
 {
     int numch = 0;
-    DDP_BSTRM bstrm={0};
+    DDP_BSTRM bstrm={NULL, 0, 0};
     DDP_BSTRM *p_bstrm=&bstrm;
     short tmp=0,acmod,lfeon,strmtyp;
     ddbs_init((short*)buf,0,p_bstrm);
@@ -277,7 +279,7 @@ static DDPerr ddbs_getbsid(DDP_BSTRM *p_inbstrm,    DDPshort *p_bsid)
 
 static int Get_Parameters(void *buf, int *sample_rate, int *frame_size,int *ChNum)
  {
-    DDP_BSTRM bstrm={0};
+    DDP_BSTRM bstrm={NULL, 0, 0};
     DDP_BSTRM *p_bstrm=&bstrm;
     DDPshort    bsid;
     int chnum = 0;
@@ -357,7 +359,7 @@ sp<MetaData> DDP_Media_Source::getFormat() {
     return mMeta;
 }
 
-status_t DDP_Media_Source::start(MetaData *params) {
+status_t DDP_Media_Source::start(__unused MetaData *params) {
     ALOGI("[DDP_Media_Source::%s: %d]\n", __FUNCTION__, __LINE__);
     mGroup = new MediaBufferGroup;
     mGroup->add_buffer(new MediaBuffer(4096));
@@ -396,7 +398,7 @@ int DDP_Media_Source::MediaSourceRead_buffer(unsigned char *buffer, int size) {
     return readcnt;
 }
 
-status_t DDP_Media_Source::read(MediaBuffer **out, const ReadOptions *options) {
+status_t DDP_Media_Source::read(MediaBuffer **out, __unused const ReadOptions *options) {
     *out = NULL;
     unsigned char ptr_head[PTR_HEAD_SIZE] = { 0 };
     int readedbytes;
@@ -524,8 +526,7 @@ Aml_OMX_Codec::Aml_OMX_Codec(void) {
         m_OMXMediaSource = new DDP_Media_Source();
         sp < MetaData > metadata = m_OMXMediaSource->getFormat();
         metadata->setCString(kKeyMIMEType, mine_type);
-        m_codec = OMXCodec::Create(m_OMXClient.interface(), metadata, false, // createEncoder
-                m_OMXMediaSource, 0, 0);
+        m_codec = SimpleDecodingSource::Create(m_OMXMediaSource, 0, 0);
 
         if (m_codec != NULL) {
             ALOGI("OMXCodec::Create success %s %d \n", __FUNCTION__, __LINE__);
@@ -703,7 +704,7 @@ int omx_codec_get_Nch() {
 
 //--------------------------------------Decoder ThreadLoop--------------------------------------------
 
-void *decode_threadloop(void *args) {
+void *decode_threadloop(__unused void *args) {
     unsigned int outlen = 0;
     unsigned int outlen_raw = 0;
     unsigned int outlen_pcm = 0;

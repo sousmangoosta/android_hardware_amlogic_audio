@@ -1,3 +1,5 @@
+#define LOG_TAG "DTSHD_Media_Source"
+
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -23,6 +25,7 @@
 #endif
 // code end
 #endif
+#include <media/stagefright/SimpleDecodingSource.h>
 
 #include "DTSHD_media_source.h"
 #include "aml_audio.h"
@@ -32,8 +35,6 @@ extern struct circle_buffer DD_out_buffer;
 extern int spdif_audio_type;
 namespace android {
 
-#define LOG_TAG "DTSHD_Media_Source"
-
 #ifdef USE_SYS_WRITE_SERVICE
 //code here for system write service
 class DeathNotifier: public IBinder::DeathRecipient
@@ -42,7 +43,7 @@ class DeathNotifier: public IBinder::DeathRecipient
         DeathNotifier() {
         }
 
-        void binderDied(const wp<IBinder>& who) {
+        void binderDied(__unused const wp<IBinder>& who) {
             ALOGW("system_write died!");
         }
 };
@@ -155,7 +156,7 @@ sp<MetaData> Dtshd_Media_Source::getFormat() {
     return mMeta;
 }
 
-status_t Dtshd_Media_Source::start(MetaData *params) {
+status_t Dtshd_Media_Source::start(__unused MetaData *params) {
     ALOGI("[Dtshd_Media_Source::%s: %d]\n", __FUNCTION__, __LINE__);
     mGroup = new MediaBufferGroup;
     mGroup->add_buffer(new MediaBuffer(4096*2));
@@ -194,7 +195,7 @@ int Dtshd_Media_Source::MediaSourceRead_buffer(unsigned char *buffer, int size) 
     }
     return readcnt;
 }
-status_t Dtshd_Media_Source::read(MediaBuffer **out, const ReadOptions *options) {
+status_t Dtshd_Media_Source::read(MediaBuffer **out, __unused const ReadOptions *options) {
     *out = NULL;
     unsigned char ptr_head[4] = { 0 };
     unsigned char ptr_head2[IEC61937_DTS_HEAD_PTR -4] = { 0 };
@@ -309,8 +310,7 @@ Aml_OMX_DtsCodec::Aml_OMX_DtsCodec(void) {
         m_OMXMediaSource = new Dtshd_Media_Source();
         sp < MetaData > metadata = m_OMXMediaSource->getFormat();
         metadata->setCString(kKeyMIMEType, mine_type);
-        m_codec = OMXCodec::Create(m_OMXClient.interface(), metadata, false, // createEncoder
-                m_OMXMediaSource, 0, 0);
+        m_codec = SimpleDecodingSource::Create(m_OMXMediaSource, 0, 0);
 
         if (m_codec != NULL) {
             ALOGI("OMXCodec::Create success %s %d \n", __FUNCTION__, __LINE__);
@@ -487,7 +487,7 @@ int omx_dts_codec_get_Nch() {
 
 //--------------------------------------Decoder ThreadLoop--------------------------------------------
 
-void *dts_decode_threadloop(void *args) {
+void *dts_decode_threadloop(__unused void *args) {
     unsigned int outlen = 0;
     unsigned int outlen_raw = 0;
     unsigned int outlen_pcm = 0;

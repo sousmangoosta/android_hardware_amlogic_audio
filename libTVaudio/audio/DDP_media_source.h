@@ -1,14 +1,13 @@
 #ifndef __DDP_MEDIA_SOURCE_H__
 #define __DDP_MEDIA_SOURCE_H__
 
-#include  "MediaSource.h"
-#include  "DataSource.h"
-#include  "MediaBufferGroup.h"
-#include  "MetaData.h"
-#include  "OMXCodec.h"
-#include  "OMX_Index.h"
-#include  "OMX_Core.h"
-#include  "OMXClient.h"
+#include  <MediaSource.h>
+#include  <DataSource.h>
+#include  <MediaBufferGroup.h>
+#include  <MetaData.h>
+#include  <OMX_Index.h>
+#include  <OMX_Core.h>
+#include  <OMXClient.h>
 
 namespace android {
 

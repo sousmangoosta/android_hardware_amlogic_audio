@@ -1,6 +1,8 @@
 /*
  audio_effect_control.c
  */
+#define LOG_TAG "effect_ctl"
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -11,8 +13,6 @@
 
 #include "aml_audio.h"
 #include "audio_effect_control.h"
-
-#define LOG_TAG "effect_ctl"
 
 //------------------------------------EQ control------------------------------------------------
 int (*EQ_process)(short *in, short *out, int framecount);

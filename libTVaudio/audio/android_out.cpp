@@ -217,7 +217,7 @@ static int RawAudioTrackInit(audio_format_t aformat,int sr)
             AUDIO_CHANNEL_OUT_STEREO, 0, (audio_output_flags_t)(AUDIO_OUTPUT_FLAG_DIRECT
             | AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO)
             ,
-            RawAudioTrackCallback/*NULL*/, NULL, 0, 0, false, 0);
+            RawAudioTrackCallback/*NULL*/, NULL, 0, 0, false, (audio_session_t)0);
     if (Status != NO_ERROR) {
         ALOGE("%s, AudioTrack raw set failed.\n", __FUNCTION__);
         if (gmpAudioTracker_raw != NULL ) {
@@ -264,7 +264,7 @@ static int AudioTrackInit(void) {
 
     Status = glpTracker->set(AUDIO_STREAM_MUSIC, 48000, AUDIO_FORMAT_PCM_16_BIT,
             AUDIO_CHANNEL_OUT_STEREO, 0, AUDIO_OUTPUT_FLAG_NONE,
-            AudioTrackCallback, NULL, 0, 0, false, 0);
+            AudioTrackCallback, NULL, 0, 0, false, (audio_session_t)0);
 
     if (Status != NO_ERROR) {
         ALOGE("%s, AudioTrack set failed.\n", __FUNCTION__);

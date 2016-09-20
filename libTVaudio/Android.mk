@@ -5,7 +5,8 @@ include $(CLEAR_VARS)
 LOCAL_MODULE := libTVaudio
 
 LOCAL_SHARED_LIBRARIES := libcutils libutils libtinyalsa libdl \
-    libmedia libbinder libstagefright
+    libmedia libbinder libstagefright libstagefright_foundation
+
 ifneq (0, $(shell expr $(PLATFORM_VERSION) \>= 5.0))
 LOCAL_SHARED_LIBRARIES += libsystemcontrolservice
 else
