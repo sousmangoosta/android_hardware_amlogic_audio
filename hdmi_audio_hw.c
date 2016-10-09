@@ -60,6 +60,9 @@
 extern int  aml_audio_hwsync_find_frame(struct aml_stream_out *out, const void *in_buffer, size_t in_bytes, uint64_t *cur_pts, int *outsize);
 extern int  spdifenc_write(const void *buffer, size_t numBytes);
 extern uint64_t  spdifenc_get_total();
+
+extern int spdifenc_init(struct pcm *mypcm);
+
 struct pcm_config pcm_config_out = {
     .channels = 2,
     .rate = MM_FULL_POWER_SAMPLING_RATE,
@@ -81,6 +84,8 @@ static void select_input_device(struct aml_audio_device *adev);
 static int adev_set_voice_volume(struct audio_hw_device *dev, float volume);
 static int do_input_standby(struct aml_stream_in *in);
 static int do_output_standby(struct aml_stream_out *out);
+
+extern void aml_audio_hwsync_clear_status(struct aml_stream_out *out);
 
 static void select_output_device(struct aml_audio_device *adev)
 {

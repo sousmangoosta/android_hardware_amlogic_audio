@@ -12,6 +12,9 @@
 #include <hardware/hardware.h>
 #include <system/audio.h>
 #include <hardware/audio.h>
+
+#include "audio_hw_utils.h"
+
 #define LOG_TAG "audio_hw_hdmi"
 
 /*

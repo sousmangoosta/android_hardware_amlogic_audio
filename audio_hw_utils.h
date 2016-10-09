@@ -7,4 +7,6 @@ int mystrstr(char *mystr,char *substr) ;
 void set_codec_type(int type);
 int get_codec_type(int format);
 int getprop_bool (const char *path);
+unsigned char codec_type_is_raw_data(int type);
+int mystrstr(char *mystr,char *substr);
 #endif

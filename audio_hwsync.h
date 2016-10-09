@@ -1,7 +1,6 @@
 #ifndef _AUDIO_HWSYNC_H_
 #define _AUDIO_HWSYNC_H_
 
-
 #define TSYNC_FIRSTAPTS "/sys/class/tsync/firstapts"
 #define TSYNC_PCRSCR    "/sys/class/tsync/pts_pcrscr"
 #define TSYNC_EVENT     "/sys/class/tsync/event"
@@ -55,4 +54,5 @@ static inline uint32_t hwsync_header_get_size(uint8_t *header)
            (((uint32_t)header[6]) << 8) |
            ((uint32_t)header[7]);
 }
+
 #endif
