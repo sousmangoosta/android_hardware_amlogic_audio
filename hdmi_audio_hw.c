@@ -240,9 +240,8 @@ static int start_output_stream(struct aml_stream_out *out)
         out->config.start_threshold = PERIOD_SIZE * PLAYBACK_PERIOD_COUNT;
     }
     out->config.avail_min = 0;
-    if (codec_type != TYPE_DTS_HD) {
+    if (codec_type != TYPE_DTS_HD)
         set_codec_type(codec_type);
-    }
     ALOGI("channels=%d---format=%d---period_count%d---period_size%d---rate=%d---",
           out->config.channels, out->config.format, out->config.period_count,
           out->config.period_size, out->config.rate);
@@ -460,13 +459,12 @@ out_standby(struct audio_stream *stream)
     pthread_mutex_lock(&out->lock);
     status = do_output_standby(out);
     set_codec_type(TYPE_PCM);
-    /* clear the hdmitx channel config to default */
+/* clear the hdmitx channel config to default */
     if (out->multich == 6) {
         sysfs_set_sysfs_str("/sys/class/amhdmitx/amhdmitx0/aud_output_chs", "0:0");
     }
-    if (out->format != AUDIO_FORMAT_DTS_HD) {
+    if (out->format != AUDIO_FORMAT_DTS_HD)
         set_codec_type(TYPE_PCM);
-    }
     pthread_mutex_unlock(&out->lock);
     pthread_mutex_unlock(&out->dev->lock);
     return status;
@@ -1003,13 +1001,13 @@ out_write(struct audio_stream_out *stream, const void *buffer, size_t bytes)
         goto exit;
     }
     if (!out->standby) {
-        //for 5.1/7.1 LPCM direct output,we assume only use left channel volume
+//for 5.1/7.1 LPCM direct output,we assume only use left channel volume		
         if (out->multich == 8) {
             int *p32 = NULL;
             short *p16 = (short *) buf;
             short *p16_temp;
             int i, NumSamps;
-            float m_vol = out->volume_l;
+	     float m_vol = out->volume_l;
             NumSamps = out_frames * frame_size / sizeof(short);
             p32 = malloc(NumSamps * sizeof(int));
             if (p32 != NULL) {
@@ -1019,14 +1017,14 @@ out_write(struct audio_stream_out *stream, const void *buffer, size_t bytes)
                 //actual  audio data layout  L,R,C,none/LFE,LRS,RRS,LS,RS
                 p16_temp = (short *) p32;
                 for (i = 0; i < NumSamps; i = i + 8) {
-                    p16_temp[0 + i]/*L*/ = m_vol * p16[0 + i];
-                    p16_temp[1 + i]/*R*/ = m_vol * p16[1 + i];
-                    p16_temp[2 + i] /*LFE*/ = m_vol * p16[3 + i];
-                    p16_temp[3 + i] /*C*/ = m_vol * p16[2 + i];
-                    p16_temp[4 + i] /*LS*/ = m_vol * p16[6 + i];
-                    p16_temp[5 + i] /*RS*/ = m_vol * p16[7 + i];
-                    p16_temp[6 + i] /*LRS*/ = m_vol * p16[4 + i];
-                    p16_temp[7 + i]/*RRS*/ = m_vol * p16[5 + i];
+                    p16_temp[0 + i]/*L*/ = m_vol*p16[0 + i];
+                    p16_temp[1 + i]/*R*/ = m_vol*p16[1 + i];
+                    p16_temp[2 + i] /*LFE*/ = m_vol*p16[3 + i];
+                    p16_temp[3 + i] /*C*/ = m_vol*p16[2 + i];
+                    p16_temp[4 + i] /*LS*/ = m_vol*p16[6 + i];
+                    p16_temp[5 + i] /*RS*/ = m_vol*p16[7 + i];
+                    p16_temp[6 + i] /*LRS*/ = m_vol*p16[4 + i];
+                    p16_temp[7 + i]/*RRS*/ = m_vol*p16[5 + i];
                 }
                 memcpy(p16, p16_temp, NumSamps * sizeof(short));
                 for (i = 0; i < NumSamps; i++) { //suppose 16bit/8ch PCM
@@ -1040,7 +1038,7 @@ out_write(struct audio_stream_out *stream, const void *buffer, size_t bytes)
             short *p16 = (short *) buf;
             short *p16_temp;
             int i, j, NumSamps, real_samples;
-            float m_vol = out->volume_l;
+	     float m_vol = out->volume_l;			
             real_samples = out_frames * frame_size / sizeof(short);
             NumSamps = real_samples * 8 / 6;
             //ALOGI("6ch to 8 ch real %d, to %d,bytes %d,frame size %d\n",real_samples,NumSamps,bytes,frame_size);
@@ -1048,12 +1046,12 @@ out_write(struct audio_stream_out *stream, const void *buffer, size_t bytes)
             if (p32 != NULL) {
                 p16_temp = (short *) p32;
                 for (i = 0; i < real_samples; i = i + 6) {
-                    p16_temp[0 + i]/*L*/ = m_vol * p16[0 + i];
-                    p16_temp[1 + i]/*R*/ = m_vol * p16[1 + i];
-                    p16_temp[2 + i] /*LFE*/ = m_vol * p16[3 + i];
-                    p16_temp[3 + i] /*C*/ = m_vol * p16[2 + i];
-                    p16_temp[4 + i] /*LS*/ = m_vol * p16[4 + i];
-                    p16_temp[5 + i] /*RS*/ = m_vol * p16[5 + i];
+                    p16_temp[0 + i]/*L*/ = m_vol*p16[0 + i];
+                    p16_temp[1 + i]/*R*/ = m_vol*p16[1 + i];
+                    p16_temp[2 + i] /*LFE*/ = m_vol*p16[3 + i];
+                    p16_temp[3 + i] /*C*/ = m_vol*p16[2 + i];
+                    p16_temp[4 + i] /*LS*/ = m_vol*p16[4 + i];
+                    p16_temp[5 + i] /*RS*/ = m_vol*p16[5 + i];
                 }
                 memcpy(p16, p16_temp, real_samples * sizeof(short));
                 memset(p32, 0, NumSamps * sizeof(int));
@@ -1089,14 +1087,14 @@ out_write(struct audio_stream_out *stream, const void *buffer, size_t bytes)
             //volume apply when direct output LPCM when stereo audio
             if (!codec_type_is_raw_data(out->codec_type) && out->config.channels == 2) {
                 short *sample = (short*)buf;
-                int l, r;
-                int kk;
-                for (kk = 0; kk <  out_frames; kk++) {
-                    l = out->volume_l * sample[kk * 2];
-                    sample[kk * 2] = CLIP(l);
-                    r = out->volume_r * sample[kk * 2 + 1];
-                    sample[kk * 2 + 1] = CLIP(r);
-                }
+		   int l,r;
+		   int kk;
+		   for (kk = 0; kk <  out_frames;kk++) {
+		   	l = out->volume_l*sample[kk*2];
+			sample[kk*2] = CLIP(l);
+			r = out->volume_r*sample[kk*2+1];
+			sample[kk*2+1] = CLIP(r);
+		   }
             }
             ret = pcm_write(out->pcm, (void *) buf, out_frames * frame_size);
             if (ret == 0) {
@@ -1124,16 +1122,8 @@ static int
 out_get_render_position(const struct audio_stream_out *stream,
                         uint32_t * dsp_frames)
 {
-    struct aml_stream_out *out = (struct aml_stream_out *)stream;
-    if (dsp_frames != NULL) {
-        //TODO: frame postion may exceed uint32_t after longtime playback
-        //But android audioflinger defined a uint32_t type,why ??
-        if (out->last_frames_postion > 0xffffffff) {
-            ALOGE("render positon exceed 0xffffffff ,do more \n");
-        }
-        *dsp_frames = out->last_frames_postion;
-    }
-    return 0;
+    LOGFUNC("%s(%p, %p)", __FUNCTION__, stream, dsp_frames);
+    return -EINVAL;
 }
 
 static int
