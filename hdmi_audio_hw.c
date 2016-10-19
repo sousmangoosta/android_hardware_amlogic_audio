@@ -174,7 +174,7 @@ static int start_output_stream(struct aml_stream_out *out)
     int port = PORT_MM;
     int ret = 0;
     int codec_type = get_codec_type(out->format);
-    if (codec_type == AUDIO_FORMAT_PCM && out->config.rate > 48000 && (out->flags & AUDIO_OUTPUT_FLAG_DIRECT)) {
+    if (out->format == AUDIO_FORMAT_PCM && out->config.rate > 48000 && (out->flags & AUDIO_OUTPUT_FLAG_DIRECT)) {
         ALOGI("start output stream for high sample rate pcm for direct mode\n");
         codec_type = TYPE_PCM_HIGH_SR;
     }
@@ -717,13 +717,12 @@ static uint32_t out_get_latency(const struct audio_stream_out *stream)
     return (frames * 1000) / out->config.rate;
 
 }
-static int out_set_volume(struct audio_stream_out *stream, float left, float right)
+static int
+out_set_volume(struct audio_stream_out *stream, float left, float right)
 {
-    struct aml_stream_out *out = (struct aml_stream_out *) stream;
-    out->volume_l = left;
-    out->volume_r = right;
-    return 0;
+    return -ENOSYS;
 }
+
 static int out_pause(struct audio_stream_out *stream)
 {
     struct aml_stream_out *out = (struct aml_stream_out *) stream;
@@ -1001,13 +1000,11 @@ out_write(struct audio_stream_out *stream, const void *buffer, size_t bytes)
         goto exit;
     }
     if (!out->standby) {
-//for 5.1/7.1 LPCM direct output,we assume only use left channel volume		
         if (out->multich == 8) {
             int *p32 = NULL;
             short *p16 = (short *) buf;
             short *p16_temp;
             int i, NumSamps;
-	     float m_vol = out->volume_l;
             NumSamps = out_frames * frame_size / sizeof(short);
             p32 = malloc(NumSamps * sizeof(int));
             if (p32 != NULL) {
@@ -1017,14 +1014,14 @@ out_write(struct audio_stream_out *stream, const void *buffer, size_t bytes)
                 //actual  audio data layout  L,R,C,none/LFE,LRS,RRS,LS,RS
                 p16_temp = (short *) p32;
                 for (i = 0; i < NumSamps; i = i + 8) {
-                    p16_temp[0 + i]/*L*/ = m_vol*p16[0 + i];
-                    p16_temp[1 + i]/*R*/ = m_vol*p16[1 + i];
-                    p16_temp[2 + i] /*LFE*/ = m_vol*p16[3 + i];
-                    p16_temp[3 + i] /*C*/ = m_vol*p16[2 + i];
-                    p16_temp[4 + i] /*LS*/ = m_vol*p16[6 + i];
-                    p16_temp[5 + i] /*RS*/ = m_vol*p16[7 + i];
-                    p16_temp[6 + i] /*LRS*/ = m_vol*p16[4 + i];
-                    p16_temp[7 + i]/*RRS*/ = m_vol*p16[5 + i];
+                    p16_temp[0 + i]/*L*/ = p16[0 + i];
+                    p16_temp[1 + i]/*R*/ = p16[1 + i];
+                    p16_temp[2 + i] /*LFE*/ = p16[3 + i];
+                    p16_temp[3 + i] /*C*/ = p16[2 + i];
+                    p16_temp[4 + i] /*LS*/ = p16[6 + i];
+                    p16_temp[5 + i] /*RS*/ = p16[7 + i];
+                    p16_temp[6 + i] /*LRS*/ = p16[4 + i];
+                    p16_temp[7 + i]/*RRS*/ = p16[5 + i];
                 }
                 memcpy(p16, p16_temp, NumSamps * sizeof(short));
                 for (i = 0; i < NumSamps; i++) { //suppose 16bit/8ch PCM
@@ -1038,7 +1035,6 @@ out_write(struct audio_stream_out *stream, const void *buffer, size_t bytes)
             short *p16 = (short *) buf;
             short *p16_temp;
             int i, j, NumSamps, real_samples;
-	     float m_vol = out->volume_l;			
             real_samples = out_frames * frame_size / sizeof(short);
             NumSamps = real_samples * 8 / 6;
             //ALOGI("6ch to 8 ch real %d, to %d,bytes %d,frame size %d\n",real_samples,NumSamps,bytes,frame_size);
@@ -1046,12 +1042,12 @@ out_write(struct audio_stream_out *stream, const void *buffer, size_t bytes)
             if (p32 != NULL) {
                 p16_temp = (short *) p32;
                 for (i = 0; i < real_samples; i = i + 6) {
-                    p16_temp[0 + i]/*L*/ = m_vol*p16[0 + i];
-                    p16_temp[1 + i]/*R*/ = m_vol*p16[1 + i];
-                    p16_temp[2 + i] /*LFE*/ = m_vol*p16[3 + i];
-                    p16_temp[3 + i] /*C*/ = m_vol*p16[2 + i];
-                    p16_temp[4 + i] /*LS*/ = m_vol*p16[4 + i];
-                    p16_temp[5 + i] /*RS*/ = m_vol*p16[5 + i];
+                    p16_temp[0 + i]/*L*/ = p16[0 + i];
+                    p16_temp[1 + i]/*R*/ = p16[1 + i];
+                    p16_temp[2 + i] /*LFE*/ = p16[3 + i];
+                    p16_temp[3 + i] /*C*/ = p16[2 + i];
+                    p16_temp[4 + i] /*LS*/ = p16[4 + i];
+                    p16_temp[5 + i] /*RS*/ = p16[5 + i];
                 }
                 memcpy(p16, p16_temp, real_samples * sizeof(short));
                 memset(p32, 0, NumSamps * sizeof(int));
@@ -1084,18 +1080,6 @@ out_write(struct audio_stream_out *stream, const void *buffer, size_t bytes)
             }
 #endif
             DEBUG("write size %d\n", out_frames * frame_size);
-            //volume apply when direct output LPCM when stereo audio
-            if (!codec_type_is_raw_data(out->codec_type) && out->config.channels == 2) {
-                short *sample = (short*)buf;
-		   int l,r;
-		   int kk;
-		   for (kk = 0; kk <  out_frames;kk++) {
-		   	l = out->volume_l*sample[kk*2];
-			sample[kk*2] = CLIP(l);
-			r = out->volume_r*sample[kk*2+1];
-			sample[kk*2+1] = CLIP(r);
-		   }
-            }
             ret = pcm_write(out->pcm, (void *) buf, out_frames * frame_size);
             if (ret == 0) {
                 out->frame_write_sum += out_frames;
