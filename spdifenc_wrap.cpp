@@ -5,6 +5,12 @@
 #include <audio_utils/spdif/SPDIFEncoder.h>
 #include <tinyalsa/asoundlib.h>
 #include <cutils/properties.h>
+
+extern "C"
+{
+#include "audio_hw_utils.h"
+}
+#if 0
 static int
 getprop_bool(const char *path)
 {
@@ -18,6 +24,8 @@ getprop_bool(const char *path)
     }
     return 0;
 }
+#endif
+extern "C" int getprop_boll(const char *path);
 namespace android
 {
 class MySPDIFEncoder : public SPDIFEncoder

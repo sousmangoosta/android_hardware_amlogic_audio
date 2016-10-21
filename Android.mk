@@ -28,7 +28,10 @@ ifeq ($(strip $(BOARD_ALSA_AUDIO)),tiny)
 	LOCAL_MODULE_RELATIVE_PATH := hw
 	LOCAL_SRC_FILES := \
 		audio_hw.c \
-		libTVaudio/audio/audio_effect_control.c
+		libTVaudio/audio/audio_effect_control.c \
+		audio_hw_utils.c \
+		audio_hwsync.c \
+		//spdifenc_wrap.cpp
 	LOCAL_C_INCLUDES += \
 		external/tinyalsa/include \
 		system/media/audio_utils/include \
@@ -38,12 +41,12 @@ ifeq ($(strip $(BOARD_ALSA_AUDIO)),tiny)
 
 	LOCAL_SHARED_LIBRARIES := \
 		liblog libcutils libtinyalsa \
-		libaudioutils libdl libaudioroute libutils
+		libaudioutils libdl libaudioroute libutils \
+		libaudiospdif
 	LOCAL_MODULE_TAGS := optional
 
 	include $(BUILD_SHARED_LIBRARY)
 #build for USB audio
-#BOARD_USE_USB_AUDIO := 1
 	ifeq ($(strip $(BOARD_USE_USB_AUDIO)),true)
 		include $(CLEAR_VARS)
 		
@@ -61,6 +64,8 @@ ifeq ($(strip $(BOARD_ALSA_AUDIO)),tiny)
 		include $(BUILD_SHARED_LIBRARY)
 	endif
 #build for hdmi audio HAL
+ifeq ($(strip $(BOARD_USE_HDMI_HAL)),true)
+	#ifneq ($(strip $(BOARD_USE_HDMI_HAL)),true)
 		include $(CLEAR_VARS)
 		
 		LOCAL_MODULE := audio.hdmi.amlogic
@@ -89,42 +94,6 @@ LOCAL_SRC_FILES += audio_hw_utils.c
 LOCAL_SRC_FILES += audio_hwsync.c
 LOCAL_MODULE_TAGS := optional
 include $(BUILD_SHARED_LIBRARY)
-
-#########################################################
-
-
-
-#########################################################
-# Audio Policy Manager
-ifeq ($(USE_CUSTOM_AUDIO_POLICY),1)
-include $(CLEAR_VARS)
-
-LOCAL_SRC_FILES := \
-	DLGAudioPolicyManager.cpp
-
-LOCAL_SHARED_LIBRARIES := \
-	libcutils \
-	liblog \
-	libutils \
-	libmedia \
-	libbinder \
-	libaudiopolicymanagerdefault \
-	libutils
-
-LOCAL_C_INCLUDES := \
-	external/tinyalsa/include \
-	$(TOPDIR)frameworks/av/services/audiopolicy \
-	$(TOPDIR)frameworks/av/services/audiopolicy/managerdefault \
-	$(TOPDIR)frameworks/av/services/audiopolicy/engine/interface \
-	$(TOPDIR)frameworks/av/services/audiopolicy/common/managerdefinitions/include \
-	$(TOPDIR)frameworks/av/services/audiopolicy/common/include
-
-
-LOCAL_MODULE := libaudiopolicymanager
-LOCAL_MODULE_TAGS := optional
-
-include $(BUILD_SHARED_LIBRARY)
-endif # USE_CUSTOM_AUDIO_POLICY
-
+	endif
 endif # BOARD_ALSA_AUDIO
 include $(call all-makefiles-under,$(LOCAL_PATH))

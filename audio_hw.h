@@ -1,4 +1,8 @@
 #ifndef _AUDIO_HW_H_
+
+#include <audio_utils/resampler.h>
+#include "audio_hwsync.h"
+
 #define _AUDIO_HW_H_
 #define _AUDIO_HW_H_
 /* ALSA cards for AML */
@@ -28,4 +32,132 @@ static unsigned int DEFAULT_OUT_SAMPLING_RATE = 48000;
 #define MM_FULL_POWER_SAMPLING_RATE 48000
 /* sampling rate when using VX port for narrow band */
 #define VX_NB_SAMPLING_RATE 8000
+
+enum {
+    TYPE_PCM = 0,
+    TYPE_AC3 = 2,
+    TYPE_DTS = 3,
+    TYPE_EAC3 = 4,
+    TYPE_DTS_HD = 5 ,
+    TYPE_MULTI_PCM = 6,
+    TYPE_TRUE_HD = 7,
+    TYPE_DTS_HD_MA = 8,//should not used after we unify DTS-HD&DTS-HD MA
+    TYPE_PCM_HIGH_SR = 9,
+};
+
+#define AML_HAL_MIXER_BUF_SIZE  64*1024
+struct aml_hal_mixer {
+    unsigned char start_buf[AML_HAL_MIXER_BUF_SIZE];
+    unsigned int wp;
+    unsigned int rp;
+    unsigned int buf_size;
+    unsigned char need_cache_flag;//flag to check if need cache some data before write to mix
+    pthread_mutex_t lock;
+};
+
+#define MAX_STREAM_NUM   5
+
+struct aml_audio_device {
+    struct audio_hw_device hw_device;
+
+    pthread_mutex_t lock;       /* see note below on mutex acquisition order */
+    pthread_mutex_t pcm_write_lock;
+    int mode;
+    audio_devices_t in_device;
+    audio_devices_t out_device;
+    int in_call;
+    struct aml_stream_in *active_input;
+    struct aml_stream_out *active_output[MAX_STREAM_NUM];
+    unsigned char active_output_count;
+    bool mic_mute;
+    unsigned int card;
+    struct audio_route *ar;
+    struct echo_reference_itfe *echo_reference;
+    bool low_power;
+    struct aml_stream_out *hwsync_output;
+    struct aml_hal_mixer hal_mixer;
+    struct pcm *pcm;
+    bool hw_sync_mode;
+    audio_hwsync_t  hwsync;
+};
+
+struct aml_stream_out {
+    struct audio_stream_out stream;
+    /* see note below on mutex acquisition order */
+    pthread_mutex_t lock;
+    /* config which set to ALSA device */
+    struct pcm_config config;
+    /* channel mask exposed to AudioFlinger. */
+    audio_channel_mask_t hal_channel_mask;
+    /* format mask exposed to AudioFlinger. */
+    audio_format_t hal_format;
+    /* samplerate exposed to AudioFlinger. */
+    unsigned int hal_rate;
+    audio_output_flags_t flags;
+    struct pcm *pcm;
+    struct resampler_itfe *resampler;
+    char *buffer;
+    size_t buffer_frames;
+    bool standby;
+    struct echo_reference_itfe *echo_reference;
+    struct aml_audio_device *dev;
+    int write_threshold;
+    bool low_power;
+    unsigned multich;
+    int codec_type;
+    uint64_t frame_write_sum;
+    uint64_t frame_skip_sum;
+    uint64_t last_frames_postion;
+    uint8_t hw_sync_header[16];
+    int hw_sync_header_cnt;
+    int hw_sync_state;
+    int hw_sync_body_cnt;
+    uint64_t spdif_enc_init_frame_write_sum;
+    uint64_t bytes_write_total;
+    int skip_frame;
+    uint8_t body_align[64];
+    uint8_t body_align_cnt;
+    int32_t *tmp_buffer_8ch;
+    int is_tv_platform;
+    void *audioeffect_tmp_buffer;
+    int has_SRS_lib;
+    int has_EQ_lib;
+    unsigned char pause_status;
+    bool hw_sync_mode;
+    bool first_apts_flag;//flag to indicate set first apts
+    uint64_t first_apts;
+    int64_t last_apts_from_header;
+    int has_aml_IIR_lib;
+    float volume_l;
+    float volume_r;
+};
+
+#define MAX_PREPROCESSORS 3 /* maximum one AGC + one NS + one AEC per input stream */
+struct aml_stream_in {
+    struct audio_stream_in stream;
+    pthread_mutex_t lock;       /* see note below on mutex acquisition order */
+    struct pcm_config config;
+    struct pcm *pcm;
+    int device;
+    struct resampler_itfe *resampler;
+    struct resampler_buffer_provider buf_provider;
+    int16_t *buffer;
+    size_t frames_in;
+    unsigned int requested_rate;
+    bool standby;
+    int source;
+    struct echo_reference_itfe *echo_reference;
+    bool need_echo_reference;
+    effect_handle_t preprocessors[MAX_PREPROCESSORS];
+    int num_preprocessors;
+    int16_t *proc_buf;
+    size_t proc_buf_size;
+    size_t proc_frames_in;
+    int16_t *ref_buf;
+    size_t ref_buf_size;
+    size_t ref_frames_in;
+    int read_status;
+    struct aml_audio_device *dev;
+};
+
 #endif

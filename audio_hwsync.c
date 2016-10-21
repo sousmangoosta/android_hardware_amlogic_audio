@@ -21,7 +21,7 @@
 #include "audio_hwsync.h"
 #include "audio_hw_utils.h"
 #include "audio_hw.h"
-#include "hdmi_audio_hw.h"
+//#include "hdmi_audio_hw.h"
 static uint32_t aml_hwsync_out_get_latency(const struct audio_stream_out *stream)
 {
     struct aml_stream_out *out = (struct aml_stream_out *)stream;
@@ -36,7 +36,7 @@ static uint32_t aml_hwsync_out_get_latency(const struct audio_stream_out *stream
     if (ret < 0) {
         return whole_latency;
     }
-    if (out->format == AUDIO_FORMAT_E_AC3) {
+    if (out->hal_format == AUDIO_FORMAT_E_AC3) {
         frames /= 4;
     }
     return (uint32_t)((frames * 1000) / out->config.rate);

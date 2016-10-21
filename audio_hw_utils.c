@@ -1,3 +1,6 @@
+#define LOG_TAG "audio_hw_utils"
+#define LOG_NDEBUG 0
+
 #include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -20,20 +23,18 @@
 #include "audio_hw_utils.h"
 
 #include "audio_hwsync.h"
-#include "hdmi_audio_hw.h"
+#include "audio_hw.h"
 
-#define LOG_TAG "audio_hw_utils"
-#define LOG_NDEBUG 0
 #ifdef LOG_NDEBUG_FUNCTION
 #define LOGFUNC(...) ((void)0)
 #else
 #define LOGFUNC(...) (ALOGD(__VA_ARGS__))
 #endif
-int get_sysfs_int16(const char *path,unsigned *value)
+int get_sysfs_int16(const char *path, int *value)
 {
     int fd;
     char valstr[64];
-    unsigned  val = 0;
+    int val = 0;
     fd = open(path, O_RDONLY);
     if (fd >= 0) {
         memset(valstr, 0, 64);
@@ -44,7 +45,7 @@ int get_sysfs_int16(const char *path,unsigned *value)
         ALOGE("unable to open file %s\n", path);
         return -1;
     }
-    if (sscanf(valstr, "0x%lx", &val) < 1) {
+    if (sscanf(valstr, "0x%x", &val) < 1) {
         ALOGE("unable to get pts from: %s", valstr);
         return -1;
     }
@@ -123,6 +124,7 @@ unsigned char codec_type_is_raw_data(int type)
         case TYPE_TRUE_HD:
         case TYPE_DTS:
         case TYPE_DTS_HD:
+        case TYPE_DTS_HD_MA:
             return 1;
         default:
             return 0;
@@ -132,19 +134,19 @@ unsigned char codec_type_is_raw_data(int type)
 int get_codec_type(int format)
 {
     switch (format) {
-        case AUDIO_FORMAT_AC3:
+    case AUDIO_FORMAT_AC3:
         return TYPE_AC3;
-        case AUDIO_FORMAT_E_AC3:
+    case AUDIO_FORMAT_E_AC3:
         return TYPE_EAC3;
-        case AUDIO_FORMAT_DTS:
+    case AUDIO_FORMAT_DTS:
         return TYPE_DTS;
-	 case AUDIO_FORMAT_DTS_HD:
-	 return TYPE_DTS_HD;
-	 case AUDIO_FORMAT_TRUEHD:
-	 return TYPE_TRUE_HD;
-        case AUDIO_FORMAT_PCM:
+    case AUDIO_FORMAT_DTS_HD:
+        return TYPE_DTS_HD_MA;
+    case AUDIO_FORMAT_TRUEHD:
+        return TYPE_TRUE_HD;
+    case AUDIO_FORMAT_PCM:
         return TYPE_PCM;
-        default:
+    default:
         return TYPE_PCM;
     }
 }
