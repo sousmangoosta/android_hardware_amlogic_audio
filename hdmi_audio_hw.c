@@ -240,9 +240,7 @@ static int start_output_stream(struct aml_stream_out *out)
         out->config.start_threshold = PERIOD_SIZE * PLAYBACK_PERIOD_COUNT;
     }
     out->config.avail_min = 0;
-    if (codec_type != TYPE_DTS_HD) {
-        set_codec_type(codec_type);
-    }
+    set_codec_type(codec_type);
     ALOGI("channels=%d---format=%d---period_count%d---period_size%d---rate=%d---",
           out->config.channels, out->config.format, out->config.period_count,
           out->config.period_size, out->config.rate);
@@ -256,7 +254,7 @@ static int start_output_stream(struct aml_stream_out *out)
     }
 #if 1
     if (codec_type_is_raw_data(codec_type) && !(out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO)) {
-        spdifenc_init(out->pcm);
+        spdifenc_init(out->pcm, out->format);
         out->spdif_enc_init_frame_write_sum = out->frame_write_sum;
     }
 #endif
@@ -393,11 +391,22 @@ static audio_channel_mask_t
 out_get_channels(const struct audio_stream *stream)
 {
     struct aml_stream_out *out = (struct aml_stream_out *) stream;
+    //5.1/7.1 LPCM
     if (out->multich > 2) {
         if (out->multich == 6) {
             return AUDIO_CHANNEL_OUT_5POINT1;
         } else if (out->multich == 8) {
             return AUDIO_CHANNEL_OUT_7POINT1;
+        }
+    }
+    //raw data
+    if (audio_is_raw_data(out->format)) {
+        if (out->hal_channel == 8) {
+            return AUDIO_CHANNEL_OUT_7POINT1;
+        } else if (out->hal_channel == 6) {
+            return AUDIO_CHANNEL_OUT_5POINT1;
+        } else {
+            return AUDIO_CHANNEL_OUT_STEREO;
         }
     }
     if (out->config.channels == 1) {
@@ -463,9 +472,6 @@ out_standby(struct audio_stream *stream)
     /* clear the hdmitx channel config to default */
     if (out->multich == 6) {
         sysfs_set_sysfs_str("/sys/class/amhdmitx/amhdmitx0/aud_output_chs", "0:0");
-    }
-    if (out->format != AUDIO_FORMAT_DTS_HD) {
-        set_codec_type(TYPE_PCM);
     }
     pthread_mutex_unlock(&out->lock);
     pthread_mutex_unlock(&out->dev->lock);
@@ -810,6 +816,12 @@ out_write(struct audio_stream_out *stream, const void *buffer, size_t bytes)
     */
     out->bytes_write_total += bytes;
     DEBUG("out %p,dev %p out_write total size %lld\n", out, adev, out->bytes_write_total);
+    //by xujian,I am not sure aiu split mode are enabled by kernel side.
+    //so assert the 64 bit align for the packed 61937 audio data
+    if (codec_type_is_raw_data(out->codec_type)  && (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) && (bytes % 64)) {
+        //ALOGW("raw data write size %d not 64 byte align ,Pls make sure bugid #125678 code is merged\n",bytes);
+        //ALOGW("if merged, ingore the warning message\n");
+    }
     pthread_mutex_lock(&adev->lock);
     pthread_mutex_lock(&out->lock);
     if (out->pause_status == true) {
@@ -826,7 +838,7 @@ out_write(struct audio_stream_out *stream, const void *buffer, size_t bytes)
         we use the AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO to distiguwish the two cases.
         */
         if ((codec_type == TYPE_AC3 || codec_type == TYPE_EAC3)  && (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO)) {
-            spdifenc_init(out->pcm);
+            spdifenc_init(out->pcm, out->format);
             out->spdif_enc_init_frame_write_sum = out->frame_write_sum;
         }
         // todo: check timestamp header PTS discontinue for new sync point after seek
@@ -1133,6 +1145,12 @@ out_get_render_position(const struct audio_stream_out *stream,
         }
         *dsp_frames = out->last_frames_postion;
     }
+    if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
+        if (out->format == AUDIO_FORMAT_DTS_HD || out->format == AUDIO_FORMAT_TRUEHD || out->format == AUDIO_FORMAT_E_AC3) {
+            *dsp_frames = *dsp_frames >> 2;
+        }
+    }
+    DEBUG("out_get_render_position return %d,playback time %d ms\n", *dsp_frames, *dsp_frames / 48);
     return 0;
 }
 
@@ -1190,6 +1208,12 @@ static int out_get_presentation_position(const struct audio_stream_out *stream, 
     }
 #undef  TIME_TO_MS
 #endif
+    if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
+        if (out->format == AUDIO_FORMAT_DTS_HD || out->format == AUDIO_FORMAT_TRUEHD || out->format == AUDIO_FORMAT_E_AC3) {
+            *frames = *frames >> 2;
+        }
+    }
+    DEBUG("out_get_presentation_position return %lld\n", *frames);
     return 0;
 }
 /** audio_stream_in implementation **/
@@ -1498,6 +1522,7 @@ adev_open_output_stream(struct audio_hw_device *dev,
         ALOGI("for raw audio output,force alsa stereo output\n");
         out->config.channels = 2;
         out->multich = 2;
+        out->hal_channel = channel_count;
     }
     /* if 2ch high sample rate PCM audio goes to direct output, set the required sample rate which needed by AF */
     if ((flags & AUDIO_OUTPUT_FLAG_DIRECT) && config->sample_rate > 0) {

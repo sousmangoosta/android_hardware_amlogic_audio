@@ -106,7 +106,12 @@ void set_codec_type(int type)
 {
     char buf[16];
     int fd = open ("/sys/class/audiodsp/digital_codec", O_WRONLY);
-
+    //treat the DTS-HD as DTS-HD MA
+    //TODO need modify the kernel code
+   //to correct the DTS-HD MA to DTS-HD
+   //As DTS-HD include DTS-HD MA
+   if (type == TYPE_DTS_HD)
+       type = TYPE_DTS_HD_MA;
     if (fd >= 0) {
         memset(buf, 0, sizeof(buf));
         snprintf(buf, sizeof(buf), "%d", type);

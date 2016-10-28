@@ -74,7 +74,8 @@ struct aml_stream_out {
     unsigned char pause_status;
     int skip_frame;
     float volume_l;
-    float volume_r;	
+    float volume_r;
+    audio_channel_mask_t hal_channel;
 };
 
 struct aml_stream_in {
