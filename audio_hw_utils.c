@@ -143,6 +143,7 @@ int get_codec_type(int format)
 	 case AUDIO_FORMAT_TRUEHD:
 	 return TYPE_TRUE_HD;
         case AUDIO_FORMAT_PCM:
+        case AUDIO_FORMAT_PCM_16_BIT:			
         return TYPE_PCM;
         default:
         return TYPE_PCM;

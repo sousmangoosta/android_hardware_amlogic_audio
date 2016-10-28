@@ -73,6 +73,8 @@ struct aml_stream_out {
     uint64_t bytes_write_total;
     unsigned char pause_status;
     int skip_frame;
+    float volume_l;
+    float volume_r;	
 };
 
 struct aml_stream_in {
@@ -89,4 +91,11 @@ struct aml_stream_in {
     int requested_rate;
     struct aml_audio_device *dev;
 };
+static inline short CLIP(int r)
+{
+    return (r >  0x7fff) ? 0x7fff :
+           (r < -0x8000) ? 0x8000 :
+           r;
+}
+
 #endif
