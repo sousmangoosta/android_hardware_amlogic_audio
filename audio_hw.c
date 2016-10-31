@@ -54,7 +54,7 @@
 //extern uint64_t  spdifenc_get_total();
 extern void aml_audio_hwsync_clear_status(struct aml_stream_out *out);
 extern int  aml_audio_hwsync_find_frame(struct aml_stream_out *out,
-        const void *in_buffer, size_t in_bytes, uint64_t *cur_pts, int *outsize);
+                                        const void *in_buffer, size_t in_bytes, uint64_t *cur_pts, int *outsize);
 
 /* ALSA cards for AML */
 #define CARD_AMLOGIC_BOARD 0
@@ -486,7 +486,7 @@ static int start_output_stream(struct aml_stream_out *out)
     if (adev->out_device & AUDIO_DEVICE_OUT_ALL_SCO) {
         port = PORT_PCM;
         out->config = pcm_config_bt;
-    } else if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT){
+    } else if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT) {
         port = PORT_SPDIF;
     }
 
@@ -638,8 +638,8 @@ static int start_output_stream_direct(struct aml_stream_out *out)
         out->config.channels = 8;
     }
     ALOGI("ALSA open configs: channels=%d, format=%d, period_count=%d, period_size=%d,,rate=%d",
-            out->config.channels, out->config.format, out->config.period_count,
-            out->config.period_size, out->config.rate);
+          out->config.channels, out->config.format, out->config.period_count,
+          out->config.period_size, out->config.rate);
 
     if (out->pcm == NULL) {
         out->pcm = pcm_open(card, port, PCM_OUT, &out->config);
@@ -653,7 +653,7 @@ static int start_output_stream_direct(struct aml_stream_out *out)
     }
 
     if (codec_type_is_raw_data(codec_type) && !(out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO)) {
-        spdifenc_init(out->pcm);
+        spdifenc_init(out->pcm, out->hal_format);
         out->spdif_enc_init_frame_write_sum = out->frame_write_sum;
     }
     out->codec_type = codec_type;
@@ -831,32 +831,32 @@ static size_t out_get_buffer_size(const struct audio_stream *stream)
      */
     size_t size = out->config.period_size;
     switch (out->hal_format) {
-        case AUDIO_FORMAT_AC3:
-        case AUDIO_FORMAT_DTS:
-            if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
-                size = 4 * PERIOD_SIZE * PLAYBACK_PERIOD_COUNT;
-            } else {
-                size = PLAYBACK_PERIOD_COUNT * PERIOD_SIZE / 2;
-            }
-            break;
-        case AUDIO_FORMAT_E_AC3:
-            if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
-                size = 16 * PERIOD_SIZE * PLAYBACK_PERIOD_COUNT;
-            } else {
-                size = PERIOD_SIZE;    //2*PLAYBACK_PERIOD_COUNT*PERIOD_SIZE;
-            }
-            break;
-        case AUDIO_FORMAT_DTS_HD:
-        case AUDIO_FORMAT_TRUEHD:
-            if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
-                size = 16 * PERIOD_SIZE * PLAYBACK_PERIOD_COUNT;
-            } else {
-                size = 4 * PLAYBACK_PERIOD_COUNT * PERIOD_SIZE;
-            }
-            break;
-        case AUDIO_FORMAT_PCM:
-        default:
-            size = PERIOD_SIZE;
+    case AUDIO_FORMAT_AC3:
+    case AUDIO_FORMAT_DTS:
+        if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
+            size = 4 * PERIOD_SIZE * PLAYBACK_PERIOD_COUNT;
+        } else {
+            size = PLAYBACK_PERIOD_COUNT * PERIOD_SIZE / 2;
+        }
+        break;
+    case AUDIO_FORMAT_E_AC3:
+        if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
+            size = 16 * PERIOD_SIZE * PLAYBACK_PERIOD_COUNT;
+        } else {
+            size = PERIOD_SIZE;    //2*PLAYBACK_PERIOD_COUNT*PERIOD_SIZE;
+        }
+        break;
+    case AUDIO_FORMAT_DTS_HD:
+    case AUDIO_FORMAT_TRUEHD:
+        if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
+            size = 16 * PERIOD_SIZE * PLAYBACK_PERIOD_COUNT;
+        } else {
+            size = 4 * PLAYBACK_PERIOD_COUNT * PERIOD_SIZE;
+        }
+        break;
+    case AUDIO_FORMAT_PCM:
+    default:
+        size = PERIOD_SIZE;
     }
     size = ((size + 15) / 16) * 16;
     return size * audio_stream_out_frame_size((struct audio_stream_out *)stream);
@@ -963,7 +963,30 @@ static int do_output_standby(struct aml_stream_out *out)
     }
     return 0;
 }
+/* must be called with hw device and output stream mutexes locked */
+static int do_output_standby_direct(struct aml_stream_out *out)
+{
+    int status = 0;
 
+    ALOGI("%s,out %p", __FUNCTION__,  out);
+
+    if (!out->standby) {
+        if (out->buffer) {
+            free(out->buffer);
+            out->buffer = NULL;
+        }
+
+        out->standby = 1;
+        pcm_close(out->pcm);
+        out->pcm = NULL;
+    }
+    set_codec_type(TYPE_PCM);
+    /* clear the hdmitx channel config to default */
+    if (out->multich == 6) {
+        sysfs_set_sysfs_str("/sys/class/amhdmitx/amhdmitx0/aud_output_chs", "0:0");
+    }
+    return status;
+}
 static int out_standby(struct audio_stream *stream)
 {
     LOGFUNC("%s(%p)", __FUNCTION__, stream);
@@ -1001,9 +1024,6 @@ static int out_standby_direct(struct audio_stream *stream)
     if (out->multich == 6) {
         sysfs_set_sysfs_str("/sys/class/amhdmitx/amhdmitx0/aud_output_chs", "0:0");
     }
-    if (out->hal_format != AUDIO_FORMAT_DTS_HD) {
-        set_codec_type(TYPE_PCM);
-    }
     pthread_mutex_unlock(&out->lock);
     pthread_mutex_unlock(&out->dev->lock);
     return status;
@@ -1020,9 +1040,15 @@ out_flush(struct audio_stream_out *stream)
     LOGFUNC("%s(%p)", __FUNCTION__, stream);
     struct aml_stream_out *out = (struct aml_stream_out *) stream;
     struct aml_audio_device *adev = out->dev;
+    do_standby_func standy_func = NULL;
+    if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT) {
+        standy_func = do_output_standby_direct;
+    } else {
+        standy_func = do_output_standby;
+    }
     pthread_mutex_lock(&adev->lock);
     pthread_mutex_lock(&out->lock);
-    do_output_standby(out);
+    standy_func(out);
     out->frame_write_sum  = 0;
     out->last_frames_postion = 0;
     pthread_mutex_unlock(&adev->lock);
@@ -1040,7 +1066,15 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
     int ret;
     uint val = 0;
     bool force_input_standby = false;
-
+    do_standby_func standy_func = NULL;
+    do_startup_func   startup_func = NULL;
+    if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT) {
+        standy_func = do_output_standby_direct;
+        startup_func = start_output_stream_direct;
+    } else {
+        standy_func = do_output_standby;
+        startup_func = start_output_stream;
+    }
     LOGFUNC("%s(kvpairs(%s), out_device=%#x)", __FUNCTION__, kvpairs, adev->out_device);
     parms = str_parms_create_str(kvpairs);
 
@@ -1052,7 +1086,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
         if (((adev->out_device & AUDIO_DEVICE_OUT_ALL) != val) && (val != 0)) {
             if (1/* out == adev->active_output[0]*/) {
                 ALOGI("audio hw select device!\n");
-                do_output_standby(out);
+                standy_func(out);
                 /* a change in output device may change the microphone selection */
                 if (adev->active_input &&
                     adev->active_input->source == AUDIO_SOURCE_VOICE_COMMUNICATION) {
@@ -1063,7 +1097,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
                      (adev->out_device & AUDIO_DEVICE_OUT_AUX_DIGITAL)) ||
                     ((val & AUDIO_DEVICE_OUT_DGTL_DOCK_HEADSET) ^
                      (adev->out_device & AUDIO_DEVICE_OUT_DGTL_DOCK_HEADSET))) {
-                    do_output_standby(out);
+                    standy_func(out);
                 }
             }
             adev->out_device &= ~AUDIO_DEVICE_OUT_ALL;
@@ -1090,8 +1124,8 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
             pthread_mutex_lock(&adev->lock);
             pthread_mutex_lock(&out->lock);
             if (!out->standby) {
-                do_output_standby(out);
-                start_output_stream(out);
+                standy_func(out);
+                startup_func(out);
                 out->standby = 0;
             }
             pthread_mutex_unlock(&adev->lock);
@@ -1109,8 +1143,8 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
             pthread_mutex_lock(&adev->lock);
             pthread_mutex_lock(&out->lock);
             if (!out->standby) {
-                do_output_standby(out);
-                start_output_stream(out);
+                standy_func(out);
+                startup_func(out);
                 out->standby = 0;
             }
             pthread_mutex_unlock(&adev->lock);
@@ -1197,7 +1231,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
         out->last_frames_postion = 0;
         /* clear up previous playback output status */
         if (!out->standby) {
-            do_output_standby(out);
+            standy_func(out);
         }
         //adev->hwsync_output = sync_enable?out:NULL;
         if (sync_enable) {
@@ -1342,7 +1376,7 @@ static int audio_effect_process(struct audio_stream_out *stream,
 }
 
 static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buffer,
-                         size_t bytes)
+                                size_t bytes)
 {
     int ret = 0;
     size_t oldBytes = bytes;
@@ -2013,7 +2047,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
         samesource_flag = get_sysfs_int("/sys/class/audiodsp/audio_samesource");
         if (samesource_flag == 0 && codec_type == 0) {
             ALOGI("to enable same source,need reset alsa,type %d,same source flag %d \n",
-                            codec_type, samesource_flag);
+                  codec_type, samesource_flag);
             pcm_stop(out->pcm);
         }
     }
@@ -2063,7 +2097,7 @@ exit:
 }
 
 static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buffer,
-                         size_t bytes)
+                                size_t bytes)
 {
     int ret = 0;
     struct aml_stream_out *out = (struct aml_stream_out *) stream;
@@ -2102,7 +2136,7 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
         we use the AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO to distiguwish the two cases.
         */
         if ((codec_type == TYPE_AC3 || codec_type == TYPE_EAC3)  && (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO)) {
-            spdifenc_init(out->pcm);
+            spdifenc_init(out->pcm, out->hal_format);
             out->spdif_enc_init_frame_write_sum = out->frame_write_sum;
         }
         // todo: check timestamp header PTS discontinue for new sync point after seek
@@ -2382,7 +2416,7 @@ exit:
 }
 
 static ssize_t out_write_tv(struct audio_stream_out *stream, const void* buffer,
-                         size_t bytes)
+                            size_t bytes)
 {
     // TV temporarily use legacy out write.
     /* TODO: add TV platform specific write here */
@@ -3145,7 +3179,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     int ret;
 
     ALOGI("**enter %s(devices=0x%04x,format=%#x, ch=0x%04x, SR=%d, flags=0x%x)", __FUNCTION__, devices,
-            config->format, config->channel_mask, config->sample_rate, flags);
+          config->format, config->channel_mask, config->sample_rate, flags);
 
     out = (struct aml_stream_out *)calloc(1, sizeof(struct aml_stream_out));
     if (!out) {
@@ -3162,10 +3196,11 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
         out->stream.common.get_channels = out_get_channels;
         out->stream.common.get_format = out_get_format;
 
-        if (out->is_tv_platform)
+        if (out->is_tv_platform) {
             out->stream.write = out_write_tv;
-        else
+        } else {
             out->stream.write = out_write;
+        }
         out->stream.common.standby = out_standby;
 
         out->hal_rate = out->config.rate;
@@ -3180,7 +3215,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
         //out->config = pcm_config_out_direct;
         out->hal_channel_mask = config->channel_mask;
         if (config->sample_rate == 0) {
-             config->sample_rate = 48000;
+            config->sample_rate = 48000;
         }
         out->config.rate = out->hal_rate = config->sample_rate;
         out->hal_format = config->format;
@@ -3193,7 +3228,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
 
         if (channel_count > 2) {
             ALOGI("[adev_open_output_stream]: out/%p channel/%d\n", out,
-                channel_count);
+                  channel_count);
             out->multich = channel_count;
             out->config.channels = channel_count;
         }
@@ -3202,7 +3237,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
             out->config.channels = 2;
             out->multich = 2;
         }
-    } else if(flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC){
+    } else if (flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC) {
         // TODO: add hwsync write here
         //out->stream.write = out_write_hwsync;
     }

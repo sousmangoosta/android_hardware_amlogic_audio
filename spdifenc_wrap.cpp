@@ -2,6 +2,7 @@
 #define LOG_TAG "AudioSPDIF-wrap"
 #include <stdint.h>
 #include <utils/Log.h>
+#include <system/audio.h>
 #include <audio_utils/spdif/SPDIFEncoder.h>
 #include <tinyalsa/asoundlib.h>
 #include <cutils/properties.h>
@@ -31,8 +32,9 @@ namespace android
 class MySPDIFEncoder : public SPDIFEncoder
 {
 public:
-    MySPDIFEncoder(struct pcm *mypcm)
-        : pcm_handle(mypcm), mTotalBytes(0), eac3_frame(0)
+    MySPDIFEncoder(struct pcm *mypcm, audio_format_t format)
+        : SPDIFEncoder(format),
+          pcm_handle(mypcm), mTotalBytes(0), eac3_frame(0), mformat(format)
     {};
     virtual ssize_t writeOutput(const void* buffer, size_t bytes)
     {
@@ -61,15 +63,16 @@ protected:
 private:
     uint64_t mTotalBytes;
     uint64_t eac3_frame;
+    audio_format_t mformat;
 };
 static MySPDIFEncoder *myencoder = NULL;
-extern "C" int spdifenc_init(struct pcm *mypcm)
+extern "C" int spdifenc_init(struct pcm *mypcm, audio_format_t format)
 {
     if (myencoder) {
         delete myencoder;
         myencoder = NULL;
     }
-    myencoder = new MySPDIFEncoder(mypcm);
+    myencoder = new MySPDIFEncoder(mypcm, format);
     if (myencoder == NULL) {
         ALOGE("init SPDIFEncoder failed \n");
         return  -1;

@@ -159,5 +159,6 @@ struct aml_stream_in {
     int read_status;
     struct aml_audio_device *dev;
 };
-
+typedef  int (*do_standby_func)(struct aml_stream_out *out);
+typedef  int (*do_startup_func)(struct aml_stream_out *out);
 #endif
