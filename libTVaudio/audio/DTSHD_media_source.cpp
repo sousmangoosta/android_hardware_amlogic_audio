@@ -201,7 +201,8 @@ status_t Dtshd_Media_Source::read(MediaBuffer **out, __unused const ReadOptions 
     unsigned char ptr_head2[IEC61937_DTS_HEAD_PTR -4] = { 0 };
     int SyncFlag = 0;
     int readedbytes = 0;
-   if (MediaSourceRead_buffer(&ptr_head[0], 4) < 4) {
+    int i = 0 ;
+    if (MediaSourceRead_buffer(&ptr_head[0], 4) < 4) {
         readedbytes = 4;
         ALOGI("WARNING:read %d bytes failed [%s %d]!\n", readedbytes,
             __FUNCTION__, __LINE__);
@@ -264,8 +265,11 @@ status_t Dtshd_Media_Source::read(MediaBuffer **out, __unused const ReadOptions 
     //ALOGI("mFrame_size:%d",mFrame_size);
     //memcpy(&mFrame_size,ptr_head2+IEC61937_DTS_HEAD_PTR-6,2);
     //ado-no lib only pack dts core data
-    mFrame_size = 2040;
+    mFrame_size = (ptr_head2[2] | ptr_head2[3] << 8)/8;
+    //ALOGI("mFrame_size:%d",mFrame_size);
     MediaBuffer *buffer;
+    int8_t tmp;
+    unsigned char *ptr;
     status_t err = mGroup->acquire_buffer(&buffer);
     if (err != OK) {
         return err;
@@ -278,6 +282,13 @@ status_t Dtshd_Media_Source::read(MediaBuffer **out, __unused const ReadOptions 
         buffer->release();
         buffer = NULL;
         return ERROR_END_OF_STREAM;
+    }
+
+    ptr = (unsigned char *)buffer->data();
+    for (i = 0;i < mFrame_size;i = i+2 ) {
+       tmp = ptr[i];
+       ptr[i] = ptr[i+1];
+       ptr[i+1] = tmp;
     }
 
     buffer->set_range(0, mFrame_size);
