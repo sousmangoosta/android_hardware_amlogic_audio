@@ -460,6 +460,7 @@ static int start_output_stream(struct aml_stream_out *out)
     int ret;
     int i  = 0;
     struct aml_stream_out *out_removed = NULL;
+    bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && audio_is_linear_pcm(out->hal_format));
     LOGFUNC("%s(adev->out_device=%#x, adev->mode=%d)",
             __FUNCTION__, adev->out_device, adev->mode);
     if (adev->mode != AUDIO_MODE_IN_CALL) {
@@ -486,7 +487,7 @@ static int start_output_stream(struct aml_stream_out *out)
     if (adev->out_device & AUDIO_DEVICE_OUT_ALL_SCO) {
         port = PORT_PCM;
         out->config = pcm_config_bt;
-    } else if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT) {
+    } else if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT && !hwsync_lpcm) {
         port = PORT_SPDIF;
     }
 
@@ -588,7 +589,7 @@ static int start_output_stream_direct(struct aml_stream_out *out)
     }
 
     card = get_aml_card();
-    ALOGI("hdmi sound card id %d,device id %d \n", card, port);
+    ALOGI("%s: hdmi sound card id %d,device id %d \n", __func__, card, port);
 
     if (out->config.channels == 6) {
         ALOGI("round 6ch to 8 ch output \n");
@@ -1040,8 +1041,9 @@ out_flush(struct audio_stream_out *stream)
     LOGFUNC("%s(%p)", __FUNCTION__, stream);
     struct aml_stream_out *out = (struct aml_stream_out *) stream;
     struct aml_audio_device *adev = out->dev;
+    bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && audio_is_linear_pcm(out->hal_format));
     do_standby_func standy_func = NULL;
-    if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT) {
+    if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT && !hwsync_lpcm) {
         standy_func = do_output_standby_direct;
     } else {
         standy_func = do_output_standby;
@@ -1066,9 +1068,10 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
     int ret;
     uint val = 0;
     bool force_input_standby = false;
+    bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && audio_is_linear_pcm(out->hal_format));
     do_standby_func standy_func = NULL;
     do_startup_func   startup_func = NULL;
-    if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT) {
+    if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT && !hwsync_lpcm) {
         standy_func = do_output_standby_direct;
         startup_func = start_output_stream_direct;
     } else {
@@ -1387,8 +1390,8 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
     size_t out_frames;
     bool force_input_standby = false;
     int16_t *in_buffer = (int16_t *)buffer;
+    int16_t *out_buffer = in_buffer;
     struct aml_stream_in *in;
-    char output_buffer_bytes[RESAMPLER_BUFFER_SIZE + 128];
     uint ouput_len;
     char *data,  *data_dst;
     volatile char *data_src;
@@ -1490,10 +1493,10 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
                     out->hw_sync_header_cnt = 0;
                     out->first_apts_flag = false;
                     bytes -= i;
-                    p += i;
+                    buffer += i;
                     in_frames = bytes / frame_size;
                     ALOGI("in_frames = %d", in_frames);
-                    in_buffer = (int16_t *)p;
+                    in_buffer = (int16_t *)buffer;
                     break;
                 } else {
                     i += 4;
@@ -1602,7 +1605,7 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
         if (out->hw_sync_mode) {
 
             int remain = out_frames * frame_size;
-            uint8_t *p = (uint8_t *)buffer;
+            uint8_t *p = buffer;
 
             //ALOGI(" --- out_write %d, cache cnt = %d, body = %d, hw_sync_state = %d", out_frames * frame_size, out->body_align_cnt, out->hw_sync_body_cnt, out->hw_sync_state);
 
@@ -1792,7 +1795,7 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
                                 pthread_mutex_unlock(&adev->lock);
 
                                 for (i = 0; i < 64 / 2 / 2; i++) {
-                                    uint r;
+                                    int r;
                                     r = w_buf[2 * i] * out->volume_l + mix_buf[2 * i];
                                     w_buf[2 * i] = CLIP(r);
                                     r = w_buf[2 * i + 1] * out->volume_r + mix_buf[2 * i + 1];
@@ -1800,7 +1803,7 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
                                 }
                             } else {
                                 for (i = 0; i < 64 / 2 / 2; i++) {
-                                    uint r;
+                                    int r;
                                     r = w_buf[2 * i] * out->volume_l;
                                     w_buf[2 * i] = CLIP(r);
                                     r = w_buf[2 * i + 1] * out->volume_r;
@@ -1919,7 +1922,7 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
                 mixer->rp = mixer->wp = 0;
                 pthread_mutex_unlock(&mixer->lock);
             }
-            ret = pcm_write(out->pcm, in_buffer, out_frames * frame_size);
+            ret = pcm_write(out->pcm, out_buffer, out_frames * frame_size);
             pthread_mutex_unlock(&adev->pcm_write_lock);
             out->frame_write_sum += out_frames;
         }
@@ -1963,7 +1966,6 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
     bool force_input_standby = false;
     int16_t *in_buffer = (int16_t *)buffer;
     struct aml_stream_in *in;
-    char output_buffer_bytes[RESAMPLER_BUFFER_SIZE + 128];
     uint ouput_len;
     char *data,  *data_dst;
     volatile char *data_src;
@@ -3177,7 +3179,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     int digital_codec;
     bool direct = false;
     int ret;
-
+    bool hwsync_lpcm = false;
     ALOGI("**enter %s(devices=0x%04x,format=%#x, ch=0x%04x, SR=%d, flags=0x%x)", __FUNCTION__, devices,
           config->format, config->channel_mask, config->sample_rate, flags);
 
@@ -3191,19 +3193,17 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
         out->is_tv_platform = 1;
     }
     out->config = pcm_config_out;
-
-    if (flags & AUDIO_OUTPUT_FLAG_PRIMARY) {
+    //hwsync with LPCM still goes to out_write_legacy
+    hwsync_lpcm = (flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && audio_is_linear_pcm(config->format));
+    ALOGI("hwsync_lpcm %d\n", hwsync_lpcm);
+    if (flags & AUDIO_OUTPUT_FLAG_PRIMARY || hwsync_lpcm) {
         out->stream.common.get_channels = out_get_channels;
         out->stream.common.get_format = out_get_format;
-
-        if (out->is_tv_platform) {
-            out->stream.write = out_write_tv;
-        } else {
-            out->stream.write = out_write;
-        }
+        out->stream.write = out_write_legacy;
         out->stream.common.standby = out_standby;
 
         out->hal_rate = out->config.rate;
+        out->hal_format = config->format;
         config->format = out_get_format(&out->stream.common);
         config->channel_mask = out_get_channels(&out->stream.common);
         config->sample_rate = out_get_sample_rate(&out->stream.common);
