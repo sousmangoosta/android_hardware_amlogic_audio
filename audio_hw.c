@@ -1576,11 +1576,12 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
 #endif
 #if 1
     codec_type = get_sysfs_int("/sys/class/audiodsp/digital_codec");
-    samesource_flag = get_sysfs_int("/sys/class/audiodsp/audio_samesource");
-    if (samesource_flag == 0 && codec_type == 0) {
+    //samesource_flag = get_sysfs_int("/sys/class/audiodsp/audio_samesource");
+    if (codec_type != out->last_codec_type/*samesource_flag == 0*/ && codec_type == 0) {
         ALOGI("to enable same source,need reset alsa,type %d,same source flag %d \n", codec_type, samesource_flag);
         pcm_stop(out->pcm);
     }
+    out->last_codec_type = codec_type;
 #endif
     if (out->is_tv_platform == 1) {
         int16_t *tmp_buffer = (int16_t *)out->audioeffect_tmp_buffer;
@@ -2431,7 +2432,7 @@ static int out_get_render_position(const struct audio_stream_out *stream,
     struct aml_stream_out *out = (struct aml_stream_out *)stream;
 
     *dsp_frames = out->last_frames_postion;
-
+    ALOGV("out_get_render_position %d\n", *dsp_frames);
     return 0;
 }
 
@@ -2462,6 +2463,7 @@ static int out_get_presentation_position(const struct audio_stream_out *stream, 
     if (timestamp != NULL) {
         clock_gettime(CLOCK_MONOTONIC, timestamp);
     }
+    ALOGV("out_get_presentation_position %lld\n", *frames);
 
     return 0;
 }

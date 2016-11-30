@@ -130,6 +130,7 @@ struct aml_stream_out {
     int has_aml_IIR_lib;
     float volume_l;
     float volume_r;
+    int last_codec_type;
 };
 
 #define MAX_PREPROCESSORS 3 /* maximum one AGC + one NS + one AEC per input stream */
