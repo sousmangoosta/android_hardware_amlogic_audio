@@ -923,17 +923,18 @@ static int set_input_device(int flag) {
 }
 
 static int new_audiotrack(struct aml_stream_out *out) {
-    int ret = 0, i = 0;
-    pthread_mutex_lock(&out->lock);
-    //ALOGD("%s, entering...\n", __FUNCTION__);
+    int i = 0, ret = 0, times = 0;
+    int dly_tm = 10000, dly_cnt = 200, retry_times = 5; //2s * 5times
 
+    pthread_mutex_lock(&out->lock);
     if (gpAmlDevice == NULL) {
         ALOGE("%s, aml audio is not open, must open it first!\n", __FUNCTION__);
         pthread_mutex_unlock(&out->lock);
         return -1;
     }
-
     set_amaudio2_enable(1);
+
+renew_audiotrack:
     ret = new_android_audiotrack();
     if (ret < 0) {
         ALOGE("%s, New an audio track is fail!\n", __FUNCTION__);
@@ -942,20 +943,26 @@ static int new_audiotrack(struct aml_stream_out *out) {
     }
 
     /* amaudio needs alsa running first to get the right params, so wait to make sure track is on */
-     if (out->user_set_device == CC_OUT_USE_AMAUDIO) {
-         while (I2S_state < 5 && gpAmlDevice->aml_Audio_ThreadTurnOnFlag == 1) {
-             usleep(10 * 1000);
-             i++;
-             if (i >= 500) {
-                 ALOGE("Time out error: wait %d s for waiting I2S ready.\n", i/100);
-                 pthread_mutex_unlock(&out->lock);
-                 return -1;
-             }
-         }
-
-         ALOGD("Wait %d times for waiting I2S ready.\n", i);
-     }
-
+    if (out->user_set_device == CC_OUT_USE_AMAUDIO) {
+        while (I2S_state < 5 && gpAmlDevice->aml_Audio_ThreadTurnOnFlag == 1) {
+            usleep(dly_tm);
+            i++;
+            if (i >= dly_cnt) {
+                release_android_audiotrack();
+                if (times < retry_times) {
+                    i = 0;
+                    times++;
+                    goto renew_audiotrack;
+                }
+                pthread_mutex_unlock(&out->lock);
+                ALOGE("%s, Time out error: wait %d ms for waiting I2S ready. I2S_state = %d\n",
+                        __FUNCTION__, i * dly_tm * retry_times/1000, I2S_state);
+                return -1;
+            }
+        }
+        ALOGD("%s, sucess: wait %d ms for waiting I2S ready. retry_times = %d\n",
+            __FUNCTION__, i * dly_tm / 1000, times);
+    }
     pthread_mutex_unlock(&out->lock);
     return 0;
 }
