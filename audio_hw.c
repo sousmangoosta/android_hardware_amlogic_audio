@@ -1550,6 +1550,7 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
                                             in_buffer, &in_frames,
                                             (int16_t*)out->buffer, &out_frames);
         in_buffer = (int16_t*)out->buffer;
+        out_buffer = in_buffer;
     } else {
         out_frames = in_frames;
     }
@@ -1575,6 +1576,7 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
     }
 #endif
 #if 1
+if (!(adev->out_device & AUDIO_DEVICE_OUT_ALL_SCO)) {
     codec_type = get_sysfs_int("/sys/class/audiodsp/digital_codec");
     //samesource_flag = get_sysfs_int("/sys/class/audiodsp/audio_samesource");
     if (codec_type != out->last_codec_type/*samesource_flag == 0*/ && codec_type == 0) {
@@ -1582,6 +1584,7 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
         pcm_stop(out->pcm);
     }
     out->last_codec_type = codec_type;
+}
 #endif
     if (out->is_tv_platform == 1) {
         int16_t *tmp_buffer = (int16_t *)out->audioeffect_tmp_buffer;
