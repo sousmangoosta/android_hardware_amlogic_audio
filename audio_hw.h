@@ -131,6 +131,10 @@ struct aml_stream_out {
     float volume_l;
     float volume_r;
     int last_codec_type;
+    //as raw audio framesize  is 1 computed by audio_stream_out_frame_size
+    //we need divide more when we got 61937 audio package
+    int raw_61937_frame_size;//61937 frame size
+    unsigned last_dsp_frame;//recorded for wraparound print info
 };
 
 #define MAX_PREPROCESSORS 3 /* maximum one AGC + one NS + one AEC per input stream */
