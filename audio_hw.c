@@ -616,18 +616,22 @@ static int start_output_stream_direct(struct aml_stream_out *out)
         out->config.period_size = PERIOD_SIZE * 2;
         out->write_threshold = PLAYBACK_PERIOD_COUNT * PERIOD_SIZE * 2;
         out->config.start_threshold = PLAYBACK_PERIOD_COUNT * PERIOD_SIZE * 2;
+        //as dd+ frame size = 1 and alsa sr as divide 16
+        //out->raw_61937_frame_size = 16;
         break;
     case AUDIO_FORMAT_DTS_HD:
     case AUDIO_FORMAT_TRUEHD:
         out->config.period_size = PERIOD_SIZE * 4 * 2;
         out->write_threshold = PLAYBACK_PERIOD_COUNT * PERIOD_SIZE * 4 * 2;
         out->config.start_threshold = PLAYBACK_PERIOD_COUNT * PERIOD_SIZE * 4 * 2;
+        //out->raw_61937_frame_size = 16;//192k 2ch
         break;
     case AUDIO_FORMAT_PCM:
     default:
         out->config.period_size = PERIOD_SIZE;
         out->write_threshold = PLAYBACK_PERIOD_COUNT * PERIOD_SIZE;
         out->config.start_threshold = PERIOD_SIZE * PLAYBACK_PERIOD_COUNT;
+        //out->raw_61937_frame_size = 4;
     }
     out->config.avail_min = 0;
     set_codec_type(codec_type);
@@ -2433,8 +2437,18 @@ static int out_get_render_position(const struct audio_stream_out *stream,
                                    uint32_t *dsp_frames)
 {
     struct aml_stream_out *out = (struct aml_stream_out *)stream;
-
+    uint64_t  dsp_frame_int64 = 0;
     *dsp_frames = out->last_frames_postion;
+    if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
+        dsp_frame_int64 = out->last_frames_postion / out->raw_61937_frame_size;
+        *dsp_frames = (uint32_t)(dsp_frame_int64 & 0xffffffff);
+        if (out->last_dsp_frame > *dsp_frames) {
+            ALOGI("maybe uint32_t wraparound,print something,last %u,now %u", out->last_dsp_frame, *dsp_frames);
+            ALOGI("wraparound,out_get_render_position return %u,playback time %llu ms,sr %d\n", *dsp_frames,
+                  out->last_frames_postion * 1000 / out->raw_61937_frame_size / out->config.rate, out->config.rate);
+
+        }
+    }
     ALOGV("out_get_render_position %d\n", *dsp_frames);
     return 0;
 }
@@ -2465,6 +2479,9 @@ static int out_get_presentation_position(const struct audio_stream_out *stream, 
 
     if (timestamp != NULL) {
         clock_gettime(CLOCK_MONOTONIC, timestamp);
+    }
+    if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
+        *frames = out->last_frames_postion / out->raw_61937_frame_size;
     }
     ALOGV("out_get_presentation_position %lld\n", *frames);
 
@@ -3224,12 +3241,17 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
         }
         out->config.rate = out->hal_rate = config->sample_rate;
         out->hal_format = config->format;
+        out->raw_61937_frame_size = 1;
         digital_codec = get_codec_type(config->format);
         if (digital_codec == TYPE_EAC3) {
+            out->raw_61937_frame_size = 16;
             out->config.period_size = pcm_config_out.period_size * 2;
         } else if (digital_codec == TYPE_TRUE_HD || digital_codec == TYPE_DTS_HD) {
             out->config.period_size = pcm_config_out.period_size * 4 * 2;
+            out->raw_61937_frame_size = 16;
         }
+        else if (digital_codec == TYPE_AC3 || digital_codec == TYPE_DTS)
+            out->raw_61937_frame_size = 4;
 
         if (channel_count > 2) {
             ALOGI("[adev_open_output_stream]: out/%p channel/%d\n", out,
