@@ -749,7 +749,7 @@ static int alsa_in_read(struct aml_stream_in *in, void* buffer, size_t bytes) {
             else
                 memset(buffer, 0, bytes);
         }
-        if (type_AUDIO_IN == 2 && GetOutputdevice() != 2) {
+        /*if (type_AUDIO_IN == 2 && GetOutputdevice() != 2) {
             short *ptr = buffer;
             short data;
             int i = 0;
@@ -760,7 +760,7 @@ static int alsa_in_read(struct aml_stream_in *in, void* buffer, size_t bytes) {
                 data = (short)audio_IIR_process((int)(*ptr), 1);
                 *ptr++ = data;
             }
-        }
+        }*/
         DoDumpData(buffer, bytes, CC_DUMP_SRC_TYPE_INPUT);
 
         output_size = bytes;
