@@ -1045,6 +1045,7 @@ out_flush(struct audio_stream_out *stream)
     LOGFUNC("%s(%p)", __FUNCTION__, stream);
     struct aml_stream_out *out = (struct aml_stream_out *) stream;
     struct aml_audio_device *adev = out->dev;
+    int ret = 0;
     bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && audio_is_linear_pcm(out->hal_format));
     do_standby_func standy_func = NULL;
     if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT && !hwsync_lpcm) {
@@ -1054,9 +1055,18 @@ out_flush(struct audio_stream_out *stream)
     }
     pthread_mutex_lock(&adev->lock);
     pthread_mutex_lock(&out->lock);
+    if (out->pause_status == true) {
+        // when pause status, set status prepare to avoid static pop sound
+        ret = pcm_ioctl(out->pcm, SNDRV_PCM_IOCTL_PREPARE);
+        if (ret < 0) {
+            ALOGE("cannot prepare pcm!");
+            goto exit;
+        }
+    }
     standy_func(out);
     out->frame_write_sum  = 0;
     out->last_frames_postion = 0;
+exit:
     pthread_mutex_unlock(&adev->lock);
     pthread_mutex_unlock(&out->lock);
     return 0;
@@ -3381,12 +3391,19 @@ static void adev_close_output_stream(struct audio_hw_device *dev,
 {
     struct aml_stream_out *out = (struct aml_stream_out *)stream;
     struct aml_audio_device *adev = (struct aml_audio_device *)dev;
+    bool hwsync_lpcm = false;
     LOGFUNC("%s(%p, %p)", __FUNCTION__, dev, stream);
     if (out->is_tv_platform == 1) {
         free(out->tmp_buffer_8ch);
         free(out->audioeffect_tmp_buffer);
     }
-    out_standby(&stream->common);
+
+    hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && audio_is_linear_pcm(out->hal_format));
+    if (out->flags & AUDIO_OUTPUT_FLAG_PRIMARY || hwsync_lpcm) {
+        out_standby(&stream->common);
+    } else if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT) {
+        out_standby_direct(&stream->common);
+    }
     if (adev->hwsync_output == out) {
         ALOGI("clear hwsync output when close stream\n");
         adev->hwsync_output = NULL;
