@@ -3254,7 +3254,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
         out->raw_61937_frame_size = 1;
         digital_codec = get_codec_type(config->format);
         if (digital_codec == TYPE_EAC3) {
-            out->raw_61937_frame_size = 16;
+            out->raw_61937_frame_size = 4;
             out->config.period_size = pcm_config_out.period_size * 2;
         } else if (digital_codec == TYPE_TRUE_HD || digital_codec == TYPE_DTS_HD) {
             out->config.period_size = pcm_config_out.period_size * 4 * 2;
