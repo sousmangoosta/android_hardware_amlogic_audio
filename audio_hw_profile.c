@@ -1,3 +1,4 @@
+#define LOG_TAG "audio_hw_profile"
 #include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -14,8 +15,6 @@
 #include <hardware/audio.h>
 
 #include "audio_hw_utils.h"
-
-#define LOG_TAG "audio_hw_hdmi"
 
 /*
   type : 0 -> playback, 1 -> capture
@@ -158,45 +157,45 @@ char*  get_hdmi_sink_cap(const char *keys)
         int nread = read(fd, infobuf, 1024);
         /* check the format cap */
         if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_FORMATS)) {
-            size += sprintf(aud_cap, "=%s|", "AUDIO_FORMAT_PCM_16_BIT");
+            size += sprintf(aud_cap, "sup_formats=%s", "AUDIO_FORMAT_PCM_16_BIT");
             if (mystrstr(infobuf, "Dobly_Digital+")) {
-                size += sprintf(aud_cap + size, "%s|", "AUDIO_FORMAT_E_AC3");
+                size += sprintf(aud_cap + size, "|%s", "AUDIO_FORMAT_E_AC3");
             }
             if (mystrstr(infobuf, "AC-3")) {
-                size += sprintf(aud_cap + size, "%s|", "AUDIO_FORMAT_AC3");
+                size += sprintf(aud_cap + size, "|%s", "AUDIO_FORMAT_AC3");
             }
             if (mystrstr(infobuf, "DTS-HD")) {
-                size += sprintf(aud_cap + size, "%s|", "AUDIO_FORMAT_DTS|AUDIO_FORMAT_DTSHD");
+                size += sprintf(aud_cap + size, "|%s", "AUDIO_FORMAT_DTS|AUDIO_FORMAT_DTSHD");
             } else if (mystrstr(infobuf, "DTS")) {
-                size += sprintf(aud_cap + size, "%s|", "AUDIO_FORMAT_DTS");
+                size += sprintf(aud_cap + size, "|%s", "AUDIO_FORMAT_DTS");
             }
             if (mystrstr(infobuf, "MAT")) {
-                size += sprintf(aud_cap + size, "%s|", "AUDIO_FORMAT_TRUEHD");
+                size += sprintf(aud_cap + size, "|%s", "AUDIO_FORMAT_TRUEHD");
             }
         }
         /*check the channel cap */
         else if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_CHANNELS)) {
             /* take the 2ch suppported as default */
-            size += sprintf(aud_cap, "=%s|", "AUDIO_CHANNEL_OUT_STEREO");
+            size += sprintf(aud_cap, "sup_channels=%s", "AUDIO_CHANNEL_OUT_STEREO");
             if (mystrstr(infobuf, "PCM, 8 ch")) {
-                size += sprintf(aud_cap + size, "%s|", "AUDIO_CHANNEL_OUT_5POINT1|AUDIO_CHANNEL_OUT_7POINT1");
+                size += sprintf(aud_cap + size, "|%s", "AUDIO_CHANNEL_OUT_5POINT1|AUDIO_CHANNEL_OUT_7POINT1");
             } else if (mystrstr(infobuf, "PCM, 6 ch")) {
-                size += sprintf(aud_cap + size, "%s|", "AUDIO_CHANNEL_OUT_5POINT1");
+                size += sprintf(aud_cap + size, "|%s", "AUDIO_CHANNEL_OUT_5POINT1");
             }
         } else if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES)) {
             /* take the 32/44.1/48 khz suppported as default */
-            size += sprintf(aud_cap, "=%s|", "32000|44100|48000");
+            size += sprintf(aud_cap, "sup_sampling_rates=%s", "32000|44100|48000");
             if (mystrstr(infobuf, "88.2")) {
-                size += sprintf(aud_cap + size, "%s|", "88200");
+                size += sprintf(aud_cap + size, "|%s", "88200");
             }
             if (mystrstr(infobuf, "96")) {
-                size += sprintf(aud_cap + size, "%s|", "96000");
+                size += sprintf(aud_cap + size, "|%s", "96000");
             }
             if (mystrstr(infobuf, "176.4")) {
-                size += sprintf(aud_cap + size, "%s|", "176400");
+                size += sprintf(aud_cap + size, "|%s", "176400");
             }
             if (mystrstr(infobuf, "192")) {
-                size += sprintf(aud_cap + size, "%s|", "192000");
+                size += sprintf(aud_cap + size, "|%s", "192000");
             }
         }
     }

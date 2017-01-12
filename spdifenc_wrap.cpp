@@ -11,22 +11,7 @@ extern "C"
 {
 #include "audio_hw_utils.h"
 }
-#if 0
-static int
-getprop_bool(const char *path)
-{
-    char buf[PROPERTY_VALUE_MAX];
-    int ret = -1;
-    ret = property_get(path, buf, NULL);
-    if (ret > 0) {
-        if (strcasecmp(buf, "true") == 0 || strcmp(buf, "1") == 0) {
-            return 1;
-        }
-    }
-    return 0;
-}
-#endif
-extern "C" int getprop_boll(const char *path);
+
 namespace android
 {
 class MySPDIFEncoder : public SPDIFEncoder
@@ -38,7 +23,8 @@ public:
     {};
     virtual ssize_t writeOutput(const void* buffer, size_t bytes)
     {
-        ALOGV("write size %d \n", bytes);
+        int ret = -1;
+        ALOGV("write size %zu \n", bytes);
 #if 1
         if (getprop_bool("media.spdif.outdump")) {
             FILE *fp1 = fopen("/data/tmp/hdmi_audio_out.spdif", "a+");
@@ -52,7 +38,11 @@ public:
         }
 #endif
         mTotalBytes += bytes;
-        return pcm_write(pcm_handle, buffer, bytes);
+        ret = pcm_write(pcm_handle, buffer, bytes);
+        if (ret)
+            return ret;
+
+        return bytes;
     }
     virtual uint64_t total_bytes()
     {
