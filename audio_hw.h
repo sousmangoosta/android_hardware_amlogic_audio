@@ -56,7 +56,7 @@ struct aml_hal_mixer {
 };
 
 #define MAX_STREAM_NUM   5
-
+#define HDMI_ARC_MAX_FORMAT  20
 struct aml_audio_device {
     struct audio_hw_device hw_device;
 
@@ -77,8 +77,7 @@ struct aml_audio_device {
     struct aml_stream_out *hwsync_output;
     struct aml_hal_mixer hal_mixer;
     struct pcm *pcm;
-    bool hw_sync_mode;
-    audio_hwsync_t  hwsync;
+    unsigned hdmi_arc_ad[HDMI_ARC_MAX_FORMAT];
 };
 
 struct aml_stream_out {
@@ -94,6 +93,7 @@ struct aml_stream_out {
     /* samplerate exposed to AudioFlinger. */
     unsigned int hal_rate;
     audio_output_flags_t flags;
+    audio_devices_t out_device;
     struct pcm *pcm;
     struct resampler_itfe *resampler;
     char *buffer;
@@ -108,15 +108,8 @@ struct aml_stream_out {
     uint64_t frame_write_sum;
     uint64_t frame_skip_sum;
     uint64_t last_frames_postion;
-    uint8_t hw_sync_header[16];
-    int hw_sync_header_cnt;
-    int hw_sync_state;
-    int hw_sync_body_cnt;
     uint64_t spdif_enc_init_frame_write_sum;
-    uint64_t bytes_write_total;
     int skip_frame;
-    uint8_t body_align[64];
-    uint8_t body_align_cnt;
     int32_t *tmp_buffer_8ch;
     int is_tv_platform;
     void *audioeffect_tmp_buffer;
@@ -124,9 +117,6 @@ struct aml_stream_out {
     int has_EQ_lib;
     unsigned char pause_status;
     bool hw_sync_mode;
-    bool first_apts_flag;//flag to indicate set first apts
-    uint64_t first_apts;
-    int64_t last_apts_from_header;
     int has_aml_IIR_lib;
     float volume_l;
     float volume_r;
@@ -135,6 +125,8 @@ struct aml_stream_out {
     //we need divide more when we got 61937 audio package
     int raw_61937_frame_size;//61937 frame size
     unsigned last_dsp_frame;//recorded for wraparound print info
+    audio_hwsync_t hwsync;
+    struct timespec timestamp;
 };
 
 #define MAX_PREPROCESSORS 3 /* maximum one AGC + one NS + one AEC per input stream */
