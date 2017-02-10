@@ -46,6 +46,7 @@ ifeq ($(strip $(BOARD_ALSA_AUDIO)),tiny)
 	LOCAL_MODULE_TAGS := optional
 
 	include $(BUILD_SHARED_LIBRARY)
+
 #build for USB audio
 	ifeq ($(strip $(BOARD_USE_USB_AUDIO)),true)
 		include $(CLEAR_VARS)
@@ -62,12 +63,12 @@ ifeq ($(strip $(BOARD_ALSA_AUDIO)),tiny)
 		LOCAL_MODULE_TAGS := optional
 		
 		include $(BUILD_SHARED_LIBRARY)
-	endif
+	endif # BOARD_USE_USB_AUDIO
+
 #build for hdmi audio HAL
-ifeq ($(strip $(BOARD_USE_HDMI_HAL)),true)
-	#ifneq ($(strip $(BOARD_USE_HDMI_HAL)),true)
+	ifeq ($(strip $(BOARD_USE_HDMI_HAL)),true)
 		include $(CLEAR_VARS)
-		
+
 		LOCAL_MODULE := audio.hdmi.amlogic
 		LOCAL_MODULE_RELATIVE_PATH := hw
 		LOCAL_SRC_FILES := \
@@ -79,21 +80,54 @@ ifeq ($(strip $(BOARD_USE_HDMI_HAL)),true)
 			
 		LOCAL_SHARED_LIBRARIES := liblog libcutils libtinyalsa libaudioutils libutils
 #ifdef DOLBY_UDC_PASSTHROUGH_HDMI_PACK
-LOCAL_SRC_FILES += spdifenc_wrap.cpp
-LOCAL_C_INCLUDES += \
-    $(call include-path-for, audio-utils)
-LOCAL_SHARED_LIBRARIES += \
-    libaudiospdif
+		LOCAL_SRC_FILES += spdifenc_wrap.cpp
+		LOCAL_C_INCLUDES += \
+			$(call include-path-for, audio-utils)
+		LOCAL_SHARED_LIBRARIES += \
+			libaudiospdif
 #endif # DOLBY_UDC_PASSTHROUGH_HDMI_PACK
-ifdef DOLBY_EAC3_TO_AC3_CONVERTER
-LOCAL_SHARED_LIBRARIES += \
-    libdlb_converter
-endif
-LOCAL_SRC_FILES += audio_hw_profile.c
-LOCAL_SRC_FILES += audio_hw_utils.c
-LOCAL_SRC_FILES += audio_hwsync.c
-LOCAL_MODULE_TAGS := optional
-include $(BUILD_SHARED_LIBRARY)
-	endif
+		ifdef DOLBY_EAC3_TO_AC3_CONVERTER
+			LOCAL_SHARED_LIBRARIES += \
+				libdlb_converter
+		endif # DOLBY_EAC3_TO_AC3_CONVERTER
+		LOCAL_SRC_FILES += audio_hw_profile.c
+		LOCAL_SRC_FILES += audio_hw_utils.c
+		LOCAL_SRC_FILES += audio_hwsync.c
+		LOCAL_MODULE_TAGS := optional
+		include $(BUILD_SHARED_LIBRARY)
+	endif # BOARD_USE_HDMI_HAL
 endif # BOARD_ALSA_AUDIO
+
+#########################################################
+# Audio Policy Manager
+ifeq ($(USE_CUSTOM_AUDIO_POLICY),1)
+include $(CLEAR_VARS)
+
+LOCAL_SRC_FILES := \
+	DLGAudioPolicyManager.cpp
+
+LOCAL_SHARED_LIBRARIES := \
+	libcutils \
+	liblog \
+	libutils \
+	libmedia \
+	libbinder \
+	libaudiopolicymanagerdefault \
+	libutils
+
+LOCAL_C_INCLUDES := \
+	external/tinyalsa/include \
+	$(TOPDIR)frameworks/av/services/audiopolicy \
+	$(TOPDIR)frameworks/av/services/audiopolicy/managerdefault \
+	$(TOPDIR)frameworks/av/services/audiopolicy/engine/interface \
+	$(TOPDIR)frameworks/av/services/audiopolicy/common/managerdefinitions/include \
+	$(TOPDIR)frameworks/av/services/audiopolicy/common/include
+
+
+LOCAL_MODULE := libaudiopolicymanager
+LOCAL_MODULE_TAGS := optional
+
+include $(BUILD_SHARED_LIBRARY)
+endif # USE_CUSTOM_AUDIO_POLICY
+
 include $(call all-makefiles-under,$(LOCAL_PATH))
