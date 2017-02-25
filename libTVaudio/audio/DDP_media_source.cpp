@@ -330,6 +330,8 @@ DDP_Media_Source::DDP_Media_Source(void) {
     mChNum = 0;
     mFrame_size = 0;
     mStop_ReadBuf_Flag = 0; //0:start 1:stop
+    mMeta->setInt32(kKeyChannelCount, 2);
+    mMeta->setInt32(kKeySampleRate, 48000);
 }
 
 DDP_Media_Source::~DDP_Media_Source() {
@@ -545,6 +547,10 @@ status_t Aml_OMX_Codec::read(unsigned char *buf, unsigned *size, int *exit) {
     MediaBuffer *srcBuffer;
     status_t status;
 
+    if (m_codec == NULL) {
+        return -1;
+    }
+
     m_OMXMediaSource->Set_Stop_ReadBuf_Flag(*exit);
 
     if (*exit) {
@@ -581,7 +587,13 @@ status_t Aml_OMX_Codec::read(unsigned char *buf, unsigned *size, int *exit) {
 
 status_t Aml_OMX_Codec::start() {
     ALOGI("[Aml_OMX_Codec::%s %d] enter!\n", __FUNCTION__, __LINE__);
-    status_t status = m_codec->start();
+    status_t status;
+    if (m_codec != NULL)
+        status = m_codec->start();
+    else
+        ALOGE("m_codec==NULL, m_codec->pause() start! [%s %d] \n",
+                __FUNCTION__, __LINE__);
+
     if (status != OK) {
         ALOGE("Err:OMX client can't start OMX decoder! status=%d (0x%08x)\n",
                 (int) status, (int) status);
