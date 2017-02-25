@@ -282,7 +282,6 @@ static int digital_raw_enable = 0;
 int output_record_enable = 0;
 int spdif_audio_type = LPCM;
 int type_AUDIO_IN = -1;
-pthread_mutex_t device_change_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void DoDumpData(void *data_buf, int size, int aud_src_type);
 static int audio_effect_process(short* buffer, int frame_size);
@@ -1044,7 +1043,9 @@ static int amaudio_out_close(struct aml_stream_out *out) {
     pthread_mutex_lock(&out->lock);
     if (out->is_tv_platform == 1) {
         free(out->tmp_buffer_8ch);
+        out->tmp_buffer_8ch = NULL;
         free(out->audioeffect_tmp_buffer);
+        out->audioeffect_tmp_buffer = NULL;
     }
     if (out->amAudio_OutHandle > 0) {
         close(out->amAudio_OutHandle);
@@ -1061,6 +1062,10 @@ static int amaudio_out_write(struct aml_stream_out *out, void* buffer,
     int input_frames = bytes >> 2;
     unsigned char *out_buffer = NULL;
 
+    if (!out->tmp_buffer_8ch || !out->audioeffect_tmp_buffer) {
+        ALOGE("buffer NULL,!!!!check\n");
+        return -1;
+    }
     pthread_mutex_lock(&out->lock);
 
      if (out->is_tv_platform == 1) {
@@ -1307,12 +1312,7 @@ static int aml_device_init(struct aml_dev *device) {
         ALOGE("%s, Load aml_IIR lib fail!\n", __FUNCTION__);
         device->has_aml_IIR_lib = 0;
     } else {
-        char value[PROPERTY_VALUE_MAX];
-        int paramter = 0;
-        if (property_get("media.audio.LFP.paramter", value, NULL) > 0) {
-            paramter = atoi(value);
-        }
-        aml_IIR_init(paramter);
+        aml_IIR_init(0);
         device->has_aml_IIR_lib = 1;
     }
 
@@ -1382,24 +1382,25 @@ static void USB_check(struct aml_stream_out *out) {
     }
 
     if ((gUSBCheckFlag & AUDIO_DEVICE_OUT_SPEAKER) == 0) {
-        if (out->output_device == CC_OUT_USE_AMAUDIO && omx_started == 0) {
+        if (out->output_device == CC_OUT_USE_AMAUDIO) {
             amaudio_out_close(out);
             set_output_deviceID(MODEANDROID);
             out->output_device = CC_OUT_USE_ANDROID;
-        } else if (out->output_device == CC_OUT_USE_ALSA && omx_started == 0) {
+            tmp_buffer_reset(&android_out_buffer);
+        } else if (out->output_device == CC_OUT_USE_ALSA) {
             alsa_out_close(out);
             new_audiotrack(out);
             set_output_deviceID(MODEANDROID);
             out->output_device = CC_OUT_USE_ANDROID;
+            tmp_buffer_reset(&android_out_buffer);
         }
         ALOGI("%s, USB audio playback device is in.\n", __FUNCTION__);
     } else if ((gUSBCheckFlag & AUDIO_DEVICE_OUT_SPEAKER) != 0 && gUSBCheckLastFlag != 0) {
-        if (out->user_set_device == CC_OUT_USE_AMAUDIO && omx_started == 0) {
+        if (out->user_set_device == CC_OUT_USE_AMAUDIO) {
             amaudio_out_open(out);
             set_output_deviceID(MODEAMAUDIO);
             out->output_device = CC_OUT_USE_AMAUDIO;
-        } else if (out->user_set_device == CC_OUT_USE_ALSA
-                && omx_started == 0) {
+        } else if (out->user_set_device == CC_OUT_USE_ALSA) {
             release_audiotrack(out);
             alsa_out_open(out);
             set_output_deviceID(MODEAMAUDIO);
@@ -1486,10 +1487,11 @@ err_exit:
         alsa_out_close(out);
         new_audiotrack(out);
     }
+    digital_raw_enable = amsysfs_get_sysfs_int("/sys/class/audiodsp/digital_raw");
+    tmp_buffer_reset(&android_out_buffer);
     set_output_deviceID(MODERAW);
     out->output_device = CC_OUT_USE_ANDROID;
     set_Hardware_resample(4);
-    digital_raw_enable = amsysfs_get_sysfs_int("/sys/class/audiodsp/digital_raw");
     if (audioin_type == AC3 || audioin_type == EAC3)
         omx_codec_init();
     if (audioin_type == DTS || audioin_type == DTSHD)
@@ -1501,6 +1503,8 @@ static int set_rawdata_in_disable(struct aml_stream_out *out) {
 
     omx_codec_close();
     omx_codec_dts_close();
+    release_raw_audio_track();
+
     if ((gUSBCheckFlag & AUDIO_DEVICE_OUT_SPEAKER) != 0) {
         if (out->user_set_device == CC_OUT_USE_AMAUDIO) {
             set_output_deviceID(MODEAMAUDIO);
@@ -1516,6 +1520,7 @@ static int set_rawdata_in_disable(struct aml_stream_out *out) {
             out->output_device = CC_OUT_USE_ALSA;
         }
     } else {
+        tmp_buffer_reset(&android_out_buffer);
         set_output_deviceID(MODEANDROID);
         out->output_device = CC_OUT_USE_ANDROID;
     }
@@ -1524,7 +1529,6 @@ static int set_rawdata_in_disable(struct aml_stream_out *out) {
 }
 
 int set_output_record_enable(int enable) {
-    pthread_mutex_lock(&device_change_lock);
     if (enable == 0) {
         output_record_enable = 0;
         ALOGI("%s, set output record disable!\n", __FUNCTION__);
@@ -1534,7 +1538,6 @@ int set_output_record_enable(int enable) {
     } else {
         ALOGE("%s, invalid setting!\n", __FUNCTION__);
     }
-    pthread_mutex_unlock(&device_change_lock);
     return 0;
 }
 
@@ -1667,6 +1670,7 @@ static void* aml_audio_threadloop(void *data __unused) {
     prctl(PR_SET_NAME, (unsigned long)"aml_TV_audio");
     ret = aml_device_init(gpAmlDevice);
     if (ret < 0) {
+        gpAmlDevice->aml_Audio_ThreadExecFlag = 0;
         ALOGE("%s, Devices fail opened!\n", __FUNCTION__);
         return NULL;
     }
@@ -1728,11 +1732,12 @@ static void* aml_audio_threadloop(void *data __unused) {
             } else if (gpAmlDevice->out.output_device == CC_OUT_USE_ANDROID) {
                 output_size = buffer_write(&android_out_buffer,
                         out->temp_buffer, output_size);
+                if (output_size  < 0) {
+                    usleep(200*1000);
+                }
             }
 
-            if (output_size < 0) {
-                //ALOGE("%s, out_write fail! bytes = %d \n", __FUNCTION__, output_size);
-            } else {
+            if (output_size > 0) {
                 out->read_buffer = update_pointer((char *) out->read_buffer,
                         output_size, (char *) start_temp_buffer,
                         TEMP_BUFFER_SIZE);
