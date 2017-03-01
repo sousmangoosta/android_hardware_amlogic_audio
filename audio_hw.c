@@ -309,7 +309,7 @@ static int start_output_stream(struct aml_stream_out *out)
     int ret;
     int i  = 0;
     struct aml_stream_out *out_removed = NULL;
-    bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && audio_is_linear_pcm(out->hal_format));
+    bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && out->config.rate  <= 48000 && audio_is_linear_pcm(out->hal_format));
     LOGFUNC("%s(adev->out_device=%#x, adev->mode=%d)",
             __FUNCTION__, adev->out_device, adev->mode);
     if (adev->mode != AUDIO_MODE_IN_CALL) {
@@ -477,7 +477,10 @@ static int start_output_stream_direct(struct aml_stream_out *out)
         break;
     case AUDIO_FORMAT_PCM:
     default:
-        out->config.period_size = PERIOD_SIZE;
+        if (out->config.rate == 96000)
+            out->config.period_size = PERIOD_SIZE * 2;
+        else
+            out->config.period_size = PERIOD_SIZE;
         out->write_threshold = PLAYBACK_PERIOD_COUNT * PERIOD_SIZE;
         out->config.start_threshold = PERIOD_SIZE * PLAYBACK_PERIOD_COUNT;
         //out->raw_61937_frame_size = 4;
@@ -710,7 +713,10 @@ static size_t out_get_buffer_size(const struct audio_stream *stream)
         break;
     case AUDIO_FORMAT_PCM:
     default:
-        size = PERIOD_SIZE;
+        if (out->config.rate == 96000)
+            size = PERIOD_SIZE * 2;
+        else
+            size = PERIOD_SIZE;
     }
     size = ((size + 15) / 16) * 16;
     return size * audio_stream_out_frame_size((struct audio_stream_out *)stream);
@@ -897,7 +903,7 @@ out_flush(struct audio_stream_out *stream)
     struct aml_stream_out *out = (struct aml_stream_out *) stream;
     struct aml_audio_device *adev = out->dev;
     int ret = 0;
-    bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && audio_is_linear_pcm(out->hal_format));
+    bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && out->config.rate  <= 48000 && audio_is_linear_pcm(out->hal_format));
     do_standby_func standy_func = NULL;
     if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT && !hwsync_lpcm) {
         standy_func = do_output_standby_direct;
@@ -937,7 +943,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
     int ret;
     uint val = 0;
     bool force_input_standby = false;
-    bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && audio_is_linear_pcm(out->hal_format));
+    bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && out->config.rate  <= 48000 && audio_is_linear_pcm(out->hal_format));
     do_standby_func standy_func = NULL;
     do_startup_func   startup_func = NULL;
     if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT && !hwsync_lpcm) {
@@ -3147,7 +3153,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     }
     out->config = pcm_config_out;
     //hwsync with LPCM still goes to out_write_legacy
-    hwsync_lpcm = (flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && audio_is_linear_pcm(config->format));
+    hwsync_lpcm = (flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && config->sample_rate <= 48000 && audio_is_linear_pcm(config->format));
     ALOGI("hwsync_lpcm %d\n", hwsync_lpcm);
     if (flags & AUDIO_OUTPUT_FLAG_PRIMARY || hwsync_lpcm) {
         out->stream.common.get_channels = out_get_channels;
@@ -3326,7 +3332,7 @@ static void adev_close_output_stream(struct audio_hw_device *dev,
         free(out->audioeffect_tmp_buffer);
     }
 
-    hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && audio_is_linear_pcm(out->hal_format));
+    hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && out->config.rate  <= 48000 && audio_is_linear_pcm(out->hal_format));
     if (out->flags & AUDIO_OUTPUT_FLAG_PRIMARY || hwsync_lpcm) {
         out_standby(&stream->common);
     } else if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT) {
