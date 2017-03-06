@@ -165,7 +165,7 @@ char*  get_hdmi_sink_cap(const char *keys)
                 size += sprintf(aud_cap + size, "|%s", "AUDIO_FORMAT_AC3");
             }
             if (mystrstr(infobuf, "DTS-HD")) {
-                size += sprintf(aud_cap + size, "|%s", "AUDIO_FORMAT_DTS|AUDIO_FORMAT_DTSHD");
+                size += sprintf(aud_cap + size, "|%s", "AUDIO_FORMAT_DTS|AUDIO_FORMAT_DTS_HD");
             } else if (mystrstr(infobuf, "DTS")) {
                 size += sprintf(aud_cap + size, "|%s", "AUDIO_FORMAT_DTS");
             }
