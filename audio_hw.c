@@ -1594,7 +1594,7 @@ if (!(adev->out_device & AUDIO_DEVICE_OUT_ALL_SCO)) {
                             // here we use acutal audio frame gap,not use the differece of  caculated current apts with the current frame pts,
                             //as there is a offset of audio latency from alsa.
                             // handle audio gap 0.5~5 s
-                            uint64_t two_frame_gap = pts_abs(hw_sync->last_apts_from_header, pts);
+                            uint64_t two_frame_gap = get_pts_gap(hw_sync->last_apts_from_header, pts);
                             if (two_frame_gap > APTS_DISCONTINUE_THRESHOLD_MIN  && two_frame_gap < APTS_DISCONTINUE_THRESHOLD_MAX) {
                                 /*   if (abs(pts -apts) > APTS_DISCONTINUE_THRESHOLD_MIN && abs(pts -apts) < APTS_DISCONTINUE_THRESHOLD_MAX) { */
                                 ALOGI("HW sync PTS discontinue, 0x%"PRIx64"->0x%"PRIx64"(from header) diff %"PRIx64",last apts %"PRIx64"(from header)",
@@ -1669,10 +1669,12 @@ if (!(adev->out_device & AUDIO_DEVICE_OUT_ALL_SCO)) {
                                 }
 #endif
                             } else {
-                                int pcr = 0;
-                                if (get_sysfs_int16(TSYNC_PCRSCR, &pcr) == 0) {
+                                uint pcr = 0;
+                                if (get_sysfs_uint(TSYNC_PCRSCR, &pcr) == 0) {
+                                    uint apts_gap = 0;
                                     int32_t apts_cal = apts & 0xffffffff;
-                                    if (abs(pcr - apts_cal) < SYSTIME_CORRECTION_THRESHOLD) {
+                                    apts_gap = get_pts_gap(pcr, apts);
+                                    if (apts_gap < SYSTIME_CORRECTION_THRESHOLD) {
                                         // do nothing
                                     } else {
                                         sprintf(buf, "0x%x", apts_cal);
@@ -2038,6 +2040,55 @@ exit:
     return bytes;
 }
 
+// insert bytes of zero data to pcm which makes A/V synchronization
+static int insert_output_bytes(struct aml_stream_out *out, size_t size)
+{
+    int ret = 0;
+    size_t insert_size = size;
+    size_t once_write_size = 0;
+    char *insert_buf = (char*)malloc(8192);
+
+    if (insert_buf == NULL) {
+        ALOGE("malloc size failed \n");
+        return -ENOMEM;
+    }
+
+    memset(insert_buf, 0, 8192);
+    while (insert_size > 0) {
+        once_write_size = insert_size > 8192 ? 8192 : insert_size;
+        ret = pcm_write(out->pcm, (void *)insert_buf, once_write_size);
+        if (ret != 0) {
+            ALOGE("pcm write failed\n");
+            goto exit;
+        }
+        insert_size -= once_write_size;
+    }
+
+exit:
+    free(insert_buf);
+    return 0;
+}
+
+enum hwsync_status {
+    CONTINUATION,  // good sync condition
+    ADJUSTMENT,    // can be adjusted by discarding or padding data
+    RESYNC,        // pts need resync
+};
+
+enum hwsync_status check_hwsync_status(uint apts_gap)
+{
+    enum hwsync_status sync_status;
+
+    if (apts_gap < APTS_DISCONTINUE_THRESHOLD_MIN)
+        sync_status = CONTINUATION;
+    else if (apts_gap > APTS_DISCONTINUE_THRESHOLD_MAX)
+        sync_status = RESYNC;
+    else
+        sync_status = ADJUSTMENT;
+
+    return sync_status;
+}
+
 static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buffer,
                                 size_t bytes)
 {
@@ -2082,7 +2133,7 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
             out->spdif_enc_init_frame_write_sum = out->frame_write_sum;
         }
         // todo: check timestamp header PTS discontinue for new sync point after seek
-        aml_audio_hwsync_clear_status(out);
+        aml_audio_hwsync_init(&out->hwsync);
         out->spdif_enc_init_frame_write_sum = out->frame_write_sum;
     }
     if (out->standby) {
@@ -2105,7 +2156,10 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
         int outsize = 0;
         char tempbuf[128];
         ALOGV("before aml_audio_hwsync_find_frame bytes %zu\n", bytes);
-        hwsync_cost_bytes = aml_audio_hwsync_find_frame(out, buffer, bytes, &cur_pts, &outsize);
+        hwsync_cost_bytes = aml_audio_hwsync_find_frame(&out->hwsync, buffer, bytes, &cur_pts, &outsize);
+        if (cur_pts > 0xffffffff) {
+            ALOGE("APTS exeed the max 32bit value");
+        }
         ALOGV("after aml_audio_hwsync_find_frame bytes remain %zu,cost %zu,outsize %d,pts %"PRIx64"\n",
               bytes - hwsync_cost_bytes, hwsync_cost_bytes, outsize, cur_pts);
         //TODO,skip 3 frames after flush, to tmp fix seek pts discontinue issue.need dig more
@@ -2122,89 +2176,63 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
             //we take this frame pts as the first apts.
             //this can fix the seek discontinue,we got a fake frame,which maybe cached before the seek
             if (hw_sync->first_apts_flag == false) {
-                hw_sync->first_apts_flag = true;
-                hw_sync->first_apts = cur_pts;
-                sprintf(tempbuf, "AUDIO_START:0x%"PRIx64"", cur_pts & 0xffffffff);
-                ALOGI("tsync -> %s,frame size %d", tempbuf, outsize);
-                if (sysfs_set_sysfs_str(TSYNC_EVENT, tempbuf) == -1) {
-                    ALOGE("set AUDIO_START failed \n");
-                }
+                aml_audio_hwsync_set_first_pts(&out->hwsync, cur_pts);
             } else {
                 uint64_t apts;
+                uint32_t apts32;
+                uint pcr = 0;
+                uint apts_gap = 0;
                 uint64_t latency = out_get_latency(stream) * 90;
                 // check PTS discontinue, which may happen when audio track switching
                 // discontinue means PTS calculated based on first_apts and frame_write_sum
                 // does not match the timestamp of next audio samples
-                if (cur_pts >  latency) {
+                if (cur_pts > latency) {
                     apts = cur_pts - latency;
                 } else {
                     apts = 0;
                 }
-                if (0) { //abs(cur_pts -apts) > APTS_DISCONTINUE_THRESHOLD) {
-                    ALOGI("HW sync PTS discontinue, 0x%"PRIx64"->0x%"PRIx64"(from header) diff %"PRIx64",last apts %"PRIx64"(from header)",
-                          apts, cur_pts, pts_abs(cur_pts, apts), hw_sync->last_apts_from_header);
-                    hw_sync->first_apts = cur_pts;
-                    sprintf(tempbuf, "AUDIO_TSTAMP_DISCONTINUITY:0x%"PRIx64"", cur_pts);
-                    if (sysfs_set_sysfs_str(TSYNC_EVENT, tempbuf) == -1) {
-                        ALOGE("unable to open file %s,err: %s", TSYNC_EVENT, strerror(errno));
-                    }
-                } else {
-                    int pcr = 0;
-                    if (get_sysfs_int16(TSYNC_PCRSCR, &pcr) == 0) {
-                        uint32_t apts_cal = apts & 0xffffffff;
-                        if (pts_abs(pcr, apts) < SYSTIME_CORRECTION_THRESHOLD) {
-                            // do nothing
-                        }
-                        // limit the gap handle to 0.5~5 s.
-                        else if ((apts - pcr) > APTS_DISCONTINUE_THRESHOLD_MIN && (apts - pcr) < APTS_DISCONTINUE_THRESHOLD_MAX) {
+
+                apts32 = apts & 0xffffffff;
+
+                if (get_sysfs_uint(TSYNC_PCRSCR, &pcr) == 0) {
+                    enum hwsync_status sync_status = CONTINUATION;
+                    apts_gap = get_pts_gap(pcr, apts32);
+                    sync_status = check_hwsync_status(apts_gap);
+
+                    // limit the gap handle to 0.5~5 s.
+                    if (sync_status == ADJUSTMENT) {
+                        // two cases: apts leading or pcr leading
+                        // apts leading needs inserting frame and pcr leading neads discarding frame
+                        if (apts32 > pcr) {
                             int insert_size = 0;
-                            int once_write_size = 0;
                             if (out->codec_type == TYPE_EAC3) {
-                                insert_size = pts_abs(apts, pcr) / 90 * 48 * 4 * 4;
+                                insert_size = apts_gap / 90 * 48 * 4 * 4;
                             } else {
-                                insert_size = pts_abs(apts, pcr) / 90 * 48 * 4;
+                                insert_size = apts_gap / 90 * 48 * 4;
                             }
                             insert_size = insert_size & (~63);
-                            ALOGI("audio gap %"PRIx64" ms ,need insert data %d\n", pts_abs(apts, pcr) / 90, insert_size);
-                            char *insert_buf = (char*)malloc(8192);
-                            if (insert_buf == NULL) {
-                                ALOGE("malloc size failed \n");
-                                pthread_mutex_unlock(&adev->lock);
-                                goto exit;
-                            }
-                            memset(insert_buf, 0, 8192);
-                            while (insert_size > 0) {
-                                once_write_size = insert_size > 8192 ? 8192 : insert_size;
-                                ret = pcm_write(out->pcm, (void *) insert_buf, once_write_size);
-                                if (ret != 0) {
-                                    ALOGE("pcm write failed\n");
-                                    free(insert_buf);
-                                    pthread_mutex_unlock(&adev->lock);
-                                    goto exit;
-                                }
-                                insert_size -= once_write_size;
-                            }
-                            free(insert_buf);
-                        }
-                        //audio pts smaller than pcr,need skip frame.
-                        else if ((pcr - apts) > APTS_DISCONTINUE_THRESHOLD_MIN && (pcr - apts) < APTS_DISCONTINUE_THRESHOLD_MAX) {
+                            ALOGI("audio gap 0x%"PRIx32" ms ,need insert data %d\n", apts_gap / 90, insert_size);
+                            ret = insert_output_bytes(out, insert_size);
+                        } else {
+                            //audio pts smaller than pcr,need skip frame.
                             //we assume one frame duration is 32 ms for DD+(6 blocks X 1536 frames,48K sample rate)
                             if (out->codec_type == TYPE_EAC3 && outsize > 0) {
-                                ALOGI("audio slow 0x%"PRIx64",skip frame @pts 0x%"PRIx64",pcr 0x%x,cur apts 0x%"PRIx64"\n", (pcr - apts), cur_pts, pcr, apts);
+                                ALOGI("audio slow 0x%x,skip frame @pts 0x%"PRIx64",pcr 0x%x,cur apts 0x%x\n",
+                                        apts_gap, cur_pts, pcr, apts32);
                                 out->frame_skip_sum  +=   1536;
-                                bytes =   outsize;
+                                bytes = outsize;
                                 pthread_mutex_unlock(&adev->lock);
                                 goto exit;
                             }
-                        } else {
-                            sprintf(tempbuf, "0x%"PRIx64"", apts);
-                            ALOGI("tsync -> reset pcrscr 0x%d -> 0x%"PRIx64", %s big,diff %"PRIx64" ms", pcr, apts, apts > (uint64_t)pcr ? "apts" : "pcr", pts_abs(apts, pcr) / 90);
-#if 0
-                            int ret_val = sysfs_set_sysfs_str(TSYNC_APTS, tempbuf);
-                            if (ret_val == -1) {
-                                ALOGE("unable to open file %s,err: %s", TSYNC_APTS, strerror(errno));
-                            }
-#endif
+                        }
+                    } else if (sync_status == RESYNC){
+                        sprintf(tempbuf, "0x%x", apts32);
+                        ALOGI("tsync -> reset pcrscr 0x%x -> 0x%x, %s big,diff %"PRIx64" ms",
+                                pcr, apts32, apts32 > pcr ? "apts" : "pcr", get_pts_gap(apts, pcr) / 90);
+
+                        int ret_val = sysfs_set_sysfs_str(TSYNC_APTS, tempbuf);
+                        if (ret_val == -1) {
+                            ALOGE("unable to open file %s,err: %s", TSYNC_APTS, strerror(errno));
                         }
                     }
                 }
@@ -3237,7 +3265,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     out->standby = true;
     out->frame_write_sum = 0;
     out->hw_sync_mode = false;
-    out->hwsync.first_apts_flag = false;
+    aml_audio_hwsync_init(&out->hwsync);
     //out->hal_rate = out->config.rate;
     if (0/*flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC*/) {
         out->hw_sync_mode = true;
