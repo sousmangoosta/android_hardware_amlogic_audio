@@ -30,11 +30,11 @@
 #else
 #define LOGFUNC(...) (ALOGD(__VA_ARGS__))
 #endif
-int get_sysfs_int16(const char *path, int *value)
+int get_sysfs_uint(const char *path, uint *value)
 {
     int fd;
     char valstr[64];
-    int val = 0;
+    uint val = 0;
     fd = open(path, O_RDONLY);
     if (fd >= 0) {
         memset(valstr, 0, 64);
