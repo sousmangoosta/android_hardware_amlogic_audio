@@ -1,63 +1,34 @@
 #define LOG_TAG "audio_hwsync"
-#include <errno.h>
-#include <pthread.h>
+
 #include <stdint.h>
 #include <inttypes.h>
-#include <sys/time.h>
-#include <stdlib.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <time.h>
-#include <utils/Timers.h>
 #include <cutils/log.h>
-#include <cutils/str_parms.h>
-#include <cutils/properties.h>
-#include <linux/ioctl.h>
-#include <hardware/hardware.h>
-#include <system/audio.h>
-#include <hardware/audio.h>
-#include <sound/asound.h>
-#include <tinyalsa/asoundlib.h>
+#include <string.h>
 
-#include "audio_hwsync.h"
 #include "audio_hw_utils.h"
-#include "audio_hw.h"
+#include "audio_hwsync.h"
 
-static uint32_t aml_hwsync_out_get_latency(const struct audio_stream_out *stream)
+void aml_audio_hwsync_init(audio_hwsync_t *p_hwsync)
 {
-    struct aml_stream_out *out = (struct aml_stream_out *)stream;
-    uint32_t whole_latency;
-    int ret;
-    snd_pcm_sframes_t frames = 0;
-    whole_latency = (out->config.period_size * out->config.period_count * 1000) / out->config.rate;
-    if (!out->pcm || !pcm_is_ready(out->pcm)) {
-        return whole_latency;
-    }
-    ret = pcm_ioctl(out->pcm, SNDRV_PCM_IOCTL_DELAY, &frames);
-    if (ret < 0) {
-        return whole_latency;
-    }
-    if (out->hal_format == AUDIO_FORMAT_E_AC3) {
-        frames /= 4;
-    }
-    return (uint32_t)((frames * 1000) / out->config.rate);
-}
+    if (p_hwsync == NULL)
+        return;
 
-void aml_audio_hwsync_clear_status(struct aml_stream_out *out)
-{
-    audio_hwsync_t *p_hwsync = &out->hwsync;
-    p_hwsync->first_apts_flag = 0;
+    p_hwsync->first_apts_flag = false;
     p_hwsync->hw_sync_state = HW_SYNC_STATE_HEADER;
     p_hwsync->hw_sync_header_cnt = 0;
     return;
 }
 //return bytes cost from input,
-int  aml_audio_hwsync_find_frame(struct aml_stream_out *out, const void *in_buffer, size_t in_bytes, uint64_t *cur_pts, int *outsize)
+int aml_audio_hwsync_find_frame(audio_hwsync_t *p_hwsync,
+        const void *in_buffer, size_t in_bytes, uint64_t *cur_pts, int *outsize)
 {
     size_t remain = in_bytes;
     uint8_t *p = (uint8_t *)in_buffer;
-    audio_hwsync_t  *p_hwsync = &out->hwsync;
     uint64_t time_diff = 0;
+
+    if (p_hwsync == NULL || in_buffer == NULL)
+        return 0;
+
     //ALOGI(" --- out_write %d, cache cnt = %d, body = %d, hw_sync_state = %d", out_frames * frame_size, out->body_align_cnt, out->hw_sync_body_cnt, out->hw_sync_state);
     while (remain > 0) {
         //if (p_hwsync->hw_sync_state == HW_SYNC_STATE_RESYNC) {
@@ -85,7 +56,7 @@ int  aml_audio_hwsync_find_frame(struct aml_stream_out *out, const void *in_buff
                 //memcpy(write_buf+write_pos,&p_hwsync->hw_sync_header[0],16);
                 //write_pos += 16;
                 pts = pts * 90 / 1000000;
-                time_diff = pts_abs(pts, p_hwsync->last_apts_from_header) / 90;
+                time_diff = get_pts_gap(pts, p_hwsync->last_apts_from_header) / 90;
                 ALOGV("pts %"PRIx64",frame len %zu\n", pts, p_hwsync->hw_sync_body_cnt);
                 ALOGV("last pts %"PRIx64",diff %"PRIx64" ms\n", p_hwsync->last_apts_from_header, time_diff);
 
@@ -120,4 +91,30 @@ int  aml_audio_hwsync_find_frame(struct aml_stream_out *out, const void *in_buff
         }
     }
     return in_bytes - remain;
+}
+
+int aml_audio_hwsync_set_first_pts(audio_hwsync_t *p_hwsync, uint64_t pts)
+{
+    uint32_t pts32;
+    char tempbuf[128];
+
+    if (p_hwsync == NULL)
+        return -1;
+
+    if (pts > 0xffffffff) {
+        ALOGE("APTS exeed the 32bit range!");
+        return -1;
+    }
+
+    pts32 = (uint32_t)pts;
+    p_hwsync->first_apts_flag = true;
+    p_hwsync->first_apts = pts;
+    sprintf(tempbuf, "AUDIO_START:0x%x", pts32);
+    ALOGI("hwsync set tsync -> %s", tempbuf);
+    if (sysfs_set_sysfs_str(TSYNC_EVENT, tempbuf) == -1) {
+        ALOGE("set AUDIO_START failed \n");
+        return -1;
+    }
+
+    return 0;
 }

@@ -1,6 +1,8 @@
 #ifndef _AUDIO_HWSYNC_H_
 #define _AUDIO_HWSYNC_H_
 
+#include <stdbool.h>
+
 #define TSYNC_FIRSTAPTS "/sys/class/tsync/firstapts"
 #define TSYNC_PCRSCR    "/sys/class/tsync/pts_pcrscr"
 #define TSYNC_EVENT     "/sys/class/tsync/event"
@@ -55,7 +57,7 @@ static inline uint32_t hwsync_header_get_size(uint8_t *header)
            ((uint32_t)header[7]);
 }
 
-static inline uint64_t pts_abs(uint64_t a, uint64_t b)
+static inline uint64_t get_pts_gap(uint64_t a, uint64_t b)
 {
     if (a >= b)
         return (a - b);
@@ -63,9 +65,8 @@ static inline uint64_t pts_abs(uint64_t a, uint64_t b)
         return (b - a);
 }
 
-struct aml_stream_out;
-
-void aml_audio_hwsync_clear_status(struct aml_stream_out *out);
-int aml_audio_hwsync_find_frame(struct aml_stream_out *out,
+void aml_audio_hwsync_init(audio_hwsync_t *p_hwsync);
+int aml_audio_hwsync_find_frame(audio_hwsync_t *p_hwsync,
                                         const void *in_buffer, size_t in_bytes, uint64_t *cur_pts, int *outsize);
+int aml_audio_hwsync_set_first_pts(audio_hwsync_t *p_hwsync, uint64_t pts);
 #endif
