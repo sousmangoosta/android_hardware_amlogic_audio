@@ -306,7 +306,7 @@ static int start_output_stream(struct aml_stream_out *out)
     struct aml_audio_device *adev = out->dev;
     unsigned int card = CARD_AMLOGIC_BOARD;
     unsigned int port = PORT_I2S;
-    int ret;
+    int ret = 0;
     int i  = 0;
     struct aml_stream_out *out_removed = NULL;
     bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && out->config.rate  <= 48000 && audio_is_linear_pcm(out->hal_format));
@@ -387,6 +387,13 @@ static int start_output_stream(struct aml_stream_out *out)
     } else {
         ALOGI("stream %p share the pcm %p\n", out, adev->pcm);
         out->pcm = adev->pcm;
+        // add to fix start output when pcm in pause state
+        if (adev->pcm_paused && pcm_is_ready(out->pcm)) {
+            ret = pcm_ioctl(out->pcm, SNDRV_PCM_IOCTL_PAUSE, 0);
+            if (ret < 0) {
+                ALOGE("cannot resume channel\n");
+            }
+        }
     }
     LOGFUNC("channels=%d---format=%d---period_count%d---period_size%d---rate=%d---",
             out->config.channels, out->config.format, out->config.period_count,
@@ -819,6 +826,7 @@ static int do_output_standby(struct aml_stream_out *out)
                 adev->pcm = NULL;
             }
             out->pause_status = false;
+            adev->pcm_paused = false;
         }
     }
     return 0;
@@ -1238,6 +1246,11 @@ static int out_pause(struct audio_stream_out *stream)
             ALOGE("cannot pause channel\n");
         } else {
             r = 0;
+            // set the pcm pause state
+            if (out->pcm == adev->pcm)
+                adev->pcm_paused = true;
+            else
+                ALOGE("out->pcm and adev->pcm are assumed same handle");
         }
     }
 exit1:
@@ -1268,6 +1281,9 @@ static int out_resume(struct audio_stream_out *stream)
             ALOGE("cannot resume channel\n");
         } else {
             r = 0;
+            // clear the pcm pause state
+            if (out->pcm == adev->pcm)
+                adev->pcm_paused = false;
         }
     }
     if (out->hw_sync_mode) {

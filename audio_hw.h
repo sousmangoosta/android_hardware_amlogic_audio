@@ -77,6 +77,7 @@ struct aml_audio_device {
     struct aml_stream_out *hwsync_output;
     struct aml_hal_mixer hal_mixer;
     struct pcm *pcm;
+    bool pcm_paused;
     unsigned hdmi_arc_ad[HDMI_ARC_MAX_FORMAT];
 };
 
