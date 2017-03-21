@@ -241,3 +241,12 @@ int amAudioGetPreMute(uint *mute)
 {
     return aml_audio_get_pre_mute(mute);
 }
+int amAudioVirtualizer(int enable, int EffectLevel) {
+    int ret = 0;
+    char param[10];
+    char parm_key[] = "AML_VIRTUALIZER";
+    sprintf(param, "%03d%03d", enable, EffectLevel);
+    ret = set_parameters(param, parm_key);
+    //Virtualizer_control(enable, EffectLevel);
+    return ret;
+}

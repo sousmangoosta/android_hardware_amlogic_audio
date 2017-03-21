@@ -36,4 +36,5 @@ int amAudioSetPreGain(float gain);
 int amAudioGetPreGain(float *gain);
 int amAudioSetPreMute(uint mute);
 int amAudioGetPreMute(uint *mute);
+int amAudioVirtualizer(int enable, int EffectLevel);
 #endif //__TV_AUDIO_AMAUDIO_H__
