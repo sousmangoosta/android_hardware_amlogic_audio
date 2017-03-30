@@ -1503,7 +1503,6 @@ static int set_rawdata_in_disable(struct aml_stream_out *out) {
 
     omx_codec_close();
     omx_codec_dts_close();
-    release_raw_audio_track();
 
     if ((gUSBCheckFlag & AUDIO_DEVICE_OUT_SPEAKER) != 0) {
         if (out->user_set_device == CC_OUT_USE_AMAUDIO) {

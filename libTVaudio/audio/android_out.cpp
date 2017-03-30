@@ -119,6 +119,10 @@ static void AudioTrackCallback(int event, void* user, void *info) {
         else if (spdif_audio_type == DTS) {
             aformat = AUDIO_FORMAT_DTS;
         }
+        else if (spdif_audio_type == LPCM && last_aformat != AUDIO_FORMAT_INVALID) {
+            RawAudioTrackRelease();
+        }
+
         if (aformat != last_aformat && aformat != AUDIO_FORMAT_INVALID) {
             ALOGI("raw aformat changed from %x to %x\n",last_aformat,aformat);
             RawAudioTrackRelease();
@@ -208,8 +212,8 @@ static int RawAudioTrackInit(audio_format_t aformat,int sr)
 
     ALOGD("%s, entering...,aformat %x,sr %d\n", __FUNCTION__,aformat,sr);
     //raw here
-    if (gmpAudioTracker_raw != NULL) {
-         glpTracker_raw = gmpAudioTracker_raw.get();
+    if (glpTracker_raw != NULL && gmpAudioTracker != NULL) {
+        glpTracker_raw = gmpAudioTracker_raw.get();
     } else {
         gmpAudioTracker_raw = new AudioTrack();
         if (gmpAudioTracker_raw == NULL) {
@@ -261,7 +265,7 @@ static int AudioTrackInit(void) {
 
     I2S_state = 0;
 
-    if (gmpAudioTracker != NULL) {
+    if (glpTracker != NULL && gmpAudioTracker != NULL) {
         glpTracker = gmpAudioTracker.get();
     } else {
         gmpAudioTracker = new AudioTrack();
