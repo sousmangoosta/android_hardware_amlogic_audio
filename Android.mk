@@ -28,6 +28,7 @@ ifeq ($(strip $(BOARD_ALSA_AUDIO)),tiny)
 	LOCAL_MODULE_RELATIVE_PATH := hw
 	LOCAL_SRC_FILES := \
 		audio_hw.c \
+		audio_virtual_effect.c \
 		libTVaudio/audio/audio_effect_control.c \
 		audio_hw_utils.c \
 		audio_hwsync.c \
@@ -38,7 +39,13 @@ ifeq ($(strip $(BOARD_ALSA_AUDIO)),tiny)
 		system/media/audio_utils/include \
 		system/media/audio_effects/include \
 		system/media/audio_route/include \
+		frameworks/av/media/libeffects/lvm/lib/StereoWidening/lib \
+		frameworks/av/media/libeffects/lvm/lib/StereoWidening/src \
+		frameworks/av/media/libeffects/lvm/lib/Common/lib \
+		frameworks/av/media/libeffects/lvm/lib/Common/src \
 		libTVaudio/audio
+
+	LOCAL_STATIC_LIBRARIES += libmusicbundle
 
 	LOCAL_SHARED_LIBRARIES := \
 		liblog libcutils libtinyalsa \

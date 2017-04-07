@@ -20,6 +20,10 @@ LOCAL_C_INCLUDES := \
     frameworks/av/include/media/stagefright \
     frameworks/av/include/media \
     frameworks/native/include/media/openmax \
+    frameworks/av/media/libeffects/lvm/lib/StereoWidening/lib \
+    frameworks/av/media/libeffects/lvm/lib/StereoWidening/src \
+    frameworks/av/media/libeffects/lvm/lib/Common/lib \
+    frameworks/av/media/libeffects/lvm/lib/Common/src \
     $(LOCAL_PATH)/ \
     $(LOCAL_PATH)/audio \
 
@@ -33,6 +37,9 @@ LOCAL_SRC_FILES := \
     audio/DDP_media_source.cpp \
     audio/aml_shelf.c \
     audio/DTSHD_media_source.cpp \
+    ../audio_virtual_effect.c
+
+LOCAL_STATIC_LIBRARIES += libmusicbundle
 
 LOCAL_CFLAGS := -DANDROID_PLATFORM_SDK_VERSION=$(PLATFORM_SDK_VERSION)  -DUSE_SYS_WRITE_SERVICE=1
 

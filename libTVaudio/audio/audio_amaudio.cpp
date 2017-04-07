@@ -23,6 +23,7 @@
 #include "audio_usb_check.h"
 #include "audio_effect_control.h"
 #include "../audio_amaudio.h"
+#include "../../audio_virtual_effect.h"
 
 int amSetAudioDelay(int delay_ms) {
     return set_audio_delay(delay_ms);
@@ -80,12 +81,14 @@ int amAudioSetRightGain(int gain) {
     return set_right_gain(gain);
 }
 
+int eq_gain_buf[5] = {0,0,0,0,0};
 int amAudioSetEQGain(int gain_val_buf[], int buf_item_cnt __unused) {
     int i = 0, ret = 0;
     int tmp_buf[5] = { 0, 0, 0, 0, 0};
 
     for (i = 0; i < 5; i++) {
         tmp_buf[i] = gain_val_buf[i];
+        eq_gain_buf[i] = gain_val_buf[i];
     }
 
     HPEQ_setParameter(tmp_buf[0], tmp_buf[1], tmp_buf[2], tmp_buf[3],
@@ -241,12 +244,15 @@ int amAudioGetPreMute(uint *mute)
 {
     return aml_audio_get_pre_mute(mute);
 }
+int virtual_para_buf[2] = {0,0};
 int amAudioVirtualizer(int enable, int EffectLevel) {
     int ret = 0;
     char param[10];
+    virtual_para_buf[0] = enable;
+    virtual_para_buf[1] = EffectLevel;
     char parm_key[] = "AML_VIRTUALIZER";
     sprintf(param, "%03d%03d", enable, EffectLevel);
     ret = set_parameters(param, parm_key);
-    //Virtualizer_control(enable, EffectLevel);
+    Virtualizer_control(enable, EffectLevel);
     return ret;
 }

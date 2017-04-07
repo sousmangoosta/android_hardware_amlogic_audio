@@ -119,6 +119,7 @@ struct aml_stream_out {
     unsigned char pause_status;
     bool hw_sync_mode;
     int has_aml_IIR_lib;
+    int has_Virtualizer;
     float volume_l;
     float volume_r;
     int last_codec_type;

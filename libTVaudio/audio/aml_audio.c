@@ -31,6 +31,7 @@
 #include "aml_shelf.h"
 #include "android_out.h"
 #include "aml_audio.h"
+#include "../../audio_virtual_effect.h"
 
 #define ANDROID_OUT_BUFFER_SIZE    (2048*8*2) //in byte
 #define DDP_OUT_BUFFER_SIZE        (2048*8*2*2*2) //in byte
@@ -126,6 +127,7 @@ struct aml_dev {
     int has_EQ_lib;
     int has_SRS_lib;
     int has_aml_IIR_lib;
+    int has_Virtualizer;
     int output_mode;
     pthread_t android_check_ThreadID;
 };
@@ -205,6 +207,7 @@ static struct aml_dev gmAmlDevice = {
     .has_EQ_lib = 0,
     .has_SRS_lib = 0,
     .has_aml_IIR_lib = 0,
+    .has_Virtualizer = 0,
     .output_mode = MODEAMAUDIO,
     .android_check_ThreadID = 0,
 };
@@ -282,9 +285,12 @@ static int digital_raw_enable = 0;
 int output_record_enable = 0;
 int spdif_audio_type = LPCM;
 int type_AUDIO_IN = -1;
+extern int virtual_para_buf[2];
+extern int eq_gain_buf[5];
 
 static void DoDumpData(void *data_buf, int size, int aud_src_type);
 static int audio_effect_process(short* buffer, int frame_size);
+static int audio_effect_load_para(struct aml_dev *device);
 
 static int getprop_bool(const char * path)
 {
@@ -1185,6 +1191,7 @@ static int audio_effect_release() {
     unload_EQ_lib();
     unload_SRS_lib();
     unload_aml_IIR_lib();
+    Virtualizer_release();
     return 0;
 }
 
@@ -1316,8 +1323,16 @@ static int aml_device_init(struct aml_dev *device) {
         device->has_aml_IIR_lib = 1;
     }
 
-    audio_IIR_init();
+    ret = Virtualizer_init();
+    if (ret == 0) {
+        device->has_Virtualizer = 1;
+    } else {
+        ALOGE("%s, init Virtualizer fail!\n", __FUNCTION__);
+        device->has_Virtualizer = 0;
+    }
 
+    audio_IIR_init();
+    audio_effect_load_para(device);
     ALOGD("%s, exiting...\n", __FUNCTION__);
     return 0;
 
@@ -1328,6 +1343,24 @@ static int aml_device_init(struct aml_dev *device) {
     error2: tmp_buffer_release (&android_out_buffer);
     error1: return ret;
 
+}
+
+static int audio_effect_load_para(struct aml_dev *device) {
+    int i;
+    int temp_eq_buf[5] = {0,0,0,0,0};
+    int temp_virtual_buf[2] = {0, 0};
+    for (i = 0; i < 5; ++i) {
+        temp_eq_buf[i] = eq_gain_buf[i];
+    }
+    temp_virtual_buf[0] = virtual_para_buf[0];
+    temp_virtual_buf[1] = virtual_para_buf[1];
+
+    if (device->has_EQ_lib)
+        HPEQ_setParameter(temp_eq_buf[0], temp_eq_buf[1], temp_eq_buf[2], temp_eq_buf[3], temp_eq_buf[4]);
+    if (device->has_Virtualizer)
+        Virtualizer_control(temp_virtual_buf[0], temp_virtual_buf[1]);
+
+    return 0;
 }
 
 static int aml_device_close(struct aml_dev *device) {
@@ -1591,6 +1624,9 @@ static int audio_effect_process(short* buffer, int frame_size) {
     int output_size = frame_size << 2;
     if (gpAmlDevice->has_SRS_lib) {
         output_size = srs_process(buffer, buffer, frame_size);
+    }
+    if (gpAmlDevice->has_Virtualizer) {
+        Virtualizer_process(buffer, buffer, frame_size);
     }
     if (gpAmlDevice->has_EQ_lib) {
         HPEQ_process(buffer, buffer, frame_size);

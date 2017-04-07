@@ -1103,6 +1103,22 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
         srs_truebass_enable(SRS_switch[2]);
         goto exit;
     }
+    char tmp2[3];
+    int Virtualizer_parm[2] = {0, 0};
+    ret = str_parms_get_str(parms, "AML_VIRTUALIZER", value, sizeof(value));
+    if (ret >= 0) {
+        for (i; i < 2; i++) {
+            tmp2[0] = value[3*i];
+            tmp2[1] = value[3*i + 1];
+            tmp2[2] = value[3*i + 2];
+            Virtualizer_parm[i] = atoi(tmp2);
+        }
+        ALOGI("audio effect Virtualizer enable: %d, strength: %d\n",
+                        Virtualizer_parm[0], Virtualizer_parm[1]);
+        ret = 0;
+        Virtualizer_control(Virtualizer_parm[0], Virtualizer_parm[1]);
+        goto exit;
+    }
     ret = str_parms_get_str(parms, "hw_av_sync", value, sizeof(value));
     if (ret >= 0) {
         int hw_sync_id = atoi(value);
@@ -1308,6 +1324,9 @@ static int audio_effect_process(struct audio_stream_out *stream,
 
     if (out->has_SRS_lib) {
         output_size = srs_process(buffer, buffer, frame_size);
+    }
+    if (out->has_Virtualizer) {
+        Virtualizer_process(buffer, buffer, frame_size);
     }
     if (out->has_EQ_lib) {
         HPEQ_process(buffer, buffer, frame_size);
@@ -3355,6 +3374,14 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
             aml_IIR_init(paramter);
             out->has_aml_IIR_lib = 1;
         }
+
+        ret = Virtualizer_init();
+        if (ret == 0) {
+            out->has_Virtualizer = 1;
+        } else {
+            ALOGE("%s, init Virtualizer fail!\n", __FUNCTION__);
+            out->has_Virtualizer = 0;
+        }
     }
     return 0;
 
@@ -3374,6 +3401,7 @@ static void adev_close_output_stream(struct audio_hw_device *dev,
     if (out->is_tv_platform == 1) {
         free(out->tmp_buffer_8ch);
         free(out->audioeffect_tmp_buffer);
+        Virtualizer_release();
     }
 
     hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && out->config.rate  <= 48000 && audio_is_linear_pcm(out->hal_format));
