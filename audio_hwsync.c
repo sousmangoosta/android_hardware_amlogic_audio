@@ -2,7 +2,6 @@
 #include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
-#include <inttypes.h>
 #include <sys/time.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -22,12 +21,12 @@
 #include "audio_hwsync.h"
 #include "audio_hw_utils.h"
 #include "audio_hw.h"
-
+//#include "hdmi_audio_hw.h"
 static uint32_t aml_hwsync_out_get_latency(const struct audio_stream_out *stream)
 {
     struct aml_stream_out *out = (struct aml_stream_out *)stream;
     uint32_t whole_latency;
-    int ret;
+    uint32_t ret;
     snd_pcm_sframes_t frames = 0;
     whole_latency = (out->config.period_size * out->config.period_count * 1000) / out->config.rate;
     if (!out->pcm || !pcm_is_ready(out->pcm)) {
@@ -45,7 +44,8 @@ static uint32_t aml_hwsync_out_get_latency(const struct audio_stream_out *stream
 
 void aml_audio_hwsync_clear_status(struct aml_stream_out *out)
 {
-    audio_hwsync_t *p_hwsync = &out->hwsync;
+    struct aml_audio_device *adev = out->dev;
+    audio_hwsync_t  *p_hwsync = &adev->hwsync;
     p_hwsync->first_apts_flag = 0;
     p_hwsync->hw_sync_state = HW_SYNC_STATE_HEADER;
     p_hwsync->hw_sync_header_cnt = 0;
@@ -54,10 +54,11 @@ void aml_audio_hwsync_clear_status(struct aml_stream_out *out)
 //return bytes cost from input,
 int  aml_audio_hwsync_find_frame(struct aml_stream_out *out, const void *in_buffer, size_t in_bytes, uint64_t *cur_pts, int *outsize)
 {
-    size_t remain = in_bytes;
-    uint8_t *p = (uint8_t *)in_buffer;
-    audio_hwsync_t  *p_hwsync = &out->hwsync;
-    uint64_t time_diff = 0;
+    int remain = in_bytes;
+    uint8_t *p = in_buffer;
+    struct aml_audio_device *adev = out->dev;
+    audio_hwsync_t  *p_hwsync = &adev->hwsync;
+    int time_diff = 0;
     //ALOGI(" --- out_write %d, cache cnt = %d, body = %d, hw_sync_state = %d", out_frames * frame_size, out->body_align_cnt, out->hw_sync_body_cnt, out->hw_sync_state);
     while (remain > 0) {
         //if (p_hwsync->hw_sync_state == HW_SYNC_STATE_RESYNC) {
@@ -75,8 +76,8 @@ int  aml_audio_hwsync_find_frame(struct aml_stream_out *out, const void *in_buff
                     p_hwsync->hw_sync_header_cnt--;
                     continue;
                 }
-                if ((in_bytes-remain) > 16)
-                    ALOGI("got the frame sync header cost %zu",in_bytes-remain);
+		if ((in_bytes-remain) > 16)
+                    ALOGI("got the frame sync header cost %d\n",in_bytes-remain);
                 p_hwsync->hw_sync_state = HW_SYNC_STATE_BODY;
                 p_hwsync->hw_sync_body_cnt = hwsync_header_get_size(&p_hwsync->hw_sync_header[0]);
                 p_hwsync->hw_sync_frame_size = p_hwsync->hw_sync_body_cnt;
@@ -85,12 +86,12 @@ int  aml_audio_hwsync_find_frame(struct aml_stream_out *out, const void *in_buff
                 //memcpy(write_buf+write_pos,&p_hwsync->hw_sync_header[0],16);
                 //write_pos += 16;
                 pts = pts * 90 / 1000000;
-                time_diff = pts_abs(pts, p_hwsync->last_apts_from_header) / 90;
-                ALOGV("pts %"PRIx64",frame len %zu\n", pts, p_hwsync->hw_sync_body_cnt);
-                ALOGV("last pts %"PRIx64",diff %"PRIx64" ms\n", p_hwsync->last_apts_from_header, time_diff);
+                time_diff = (abs(pts - p_hwsync->last_apts_from_header)) / 90;
+                ALOGV("pts %llx,frame len %d\n", pts, p_hwsync->hw_sync_body_cnt);
+                ALOGV("last pts %llx,diff %d ms\n", p_hwsync->last_apts_from_header, time_diff);
 
                 if (time_diff > 32) {
-                    ALOGI("pts  time gap %"PRIx64" ms,last %"PRIx64",cur %"PRIx64"\n", time_diff,
+                    ALOGI("pts  time gap %d ms,last %llx,cur %llx\n", time_diff,
                           p_hwsync->last_apts_from_header, pts);
                 }
                 p_hwsync->last_apts_from_header = pts;

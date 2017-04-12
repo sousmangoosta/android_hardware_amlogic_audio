@@ -15,7 +15,7 @@
  */
 
 #define LOG_TAG "audio_hw_primary"
-//#define LOG_NDEBUG 0
+//#define LOG_NALOGV 0
 //#define LOG_NALOGV_FUNCTION
 #ifdef LOG_NALOGV_FUNCTION
 #define LOGFUNC(...) ((void)0)
@@ -26,7 +26,6 @@
 #include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
-#include <inttypes.h>
 #include <sys/time.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -50,8 +49,12 @@
 #include "libTVaudio/audio/audio_effect_control.h"
 #include "audio_hw.h"
 #include "audio_hw_utils.h"
-#include "audio_hw_profile.h"
 #include "spdifenc_wrap.h"
+//extern int  spdifenc_write(const void *buffer, size_t numBytes);
+//extern uint64_t  spdifenc_get_total();
+extern void aml_audio_hwsync_clear_status(struct aml_stream_out *out);
+extern int  aml_audio_hwsync_find_frame(struct aml_stream_out *out,
+                                        const void *in_buffer, size_t in_bytes, uint64_t *cur_pts, int *outsize);
 
 /* ALSA cards for AML */
 #define CARD_AMLOGIC_BOARD 0
@@ -87,6 +90,14 @@ static unsigned  CAPTURE_PERIOD_SIZE = DEFAULT_CAPTURE_PERIOD_SIZE;
 #define VX_NB_SAMPLING_RATE 8000
 #define MIXER_XML_PATH "/system/etc/mixer_paths.xml"
 
+#define TSYNC_FIRSTAPTS "/sys/class/tsync/firstapts"
+#define TSYNC_PCRSCR    "/sys/class/tsync/pts_pcrscr"
+#define TSYNC_EVENT     "/sys/class/tsync/event"
+#define TSYNC_APTS      "/sys/class/tsync/pts_audio"
+#define SYSTIME_CORRECTION_THRESHOLD        (90000*10/100)
+#define APTS_DISCONTINUE_THRESHOLD_MIN    (90000/1000*100)
+#define APTS_DISCONTINUE_THRESHOLD_MAX    (5*90000)
+
 static const struct pcm_config pcm_config_out = {
     .channels = 2,
     .rate = MM_FULL_POWER_SAMPLING_RATE,
@@ -118,6 +129,10 @@ static const struct pcm_config pcm_config_bt = {
     .period_count = PLAYBACK_PERIOD_COUNT,
     .format = PCM_FORMAT_S16_LE,
 };
+
+#define HW_SYNC_STATE_HEADER 0
+#define HW_SYNC_STATE_BODY   1
+#define HW_SYNC_STATE_RESYNC 2
 
 static void select_output_device(struct aml_audio_device *adev);
 static void select_input_device(struct aml_audio_device *adev);
@@ -230,6 +245,35 @@ static int aml_hal_mixer_read(struct aml_hal_mixer *mixer, void *r_buf, uint siz
     return size;
 }
 // aml audio hal mixer code end
+#if 0
+static inline bool hwsync_header_valid(uint8_t *header)
+{
+    return (header[0] == 0x55) &&
+           (header[1] == 0x55) &&
+           (header[2] == 0x00) &&
+           (header[3] == 0x01);
+}
+
+static inline uint64_t hwsync_header_get_pts(uint8_t *header)
+{
+    return (((uint64_t)header[8]) << 56) |
+           (((uint64_t)header[9]) << 48) |
+           (((uint64_t)header[10]) << 40) |
+           (((uint64_t)header[11]) << 32) |
+           (((uint64_t)header[12]) << 24) |
+           (((uint64_t)header[13]) << 16) |
+           (((uint64_t)header[14]) << 8) |
+           ((uint64_t)header[15]);
+}
+
+static inline uint32_t hwsync_header_get_size(uint8_t *header)
+{
+    return (((uint32_t)header[4]) << 24) |
+           (((uint32_t)header[5]) << 16) |
+           (((uint32_t)header[6]) << 8) |
+           ((uint32_t)header[7]);
+}
+#endif
 
 static void select_devices(struct aml_audio_device *adev)
 {
@@ -300,6 +344,113 @@ static void select_mode(struct aml_audio_device *adev)
     return;
 }
 
+static int get_aml_card(void)
+{
+    int card = -1, err = 0;
+    int fd = -1;
+    unsigned fileSize = 512;
+    char *read_buf = NULL, *pd = NULL;
+    static const char *const SOUND_CARDS_PATH = "/proc/asound/cards";
+    fd = open(SOUND_CARDS_PATH, O_RDONLY);
+    if (fd < 0) {
+        ALOGE("ERROR: failed to open config file %s error: %d\n", SOUND_CARDS_PATH, errno);
+        close(fd);
+        return -EINVAL;
+    }
+
+    read_buf = (char *)malloc(fileSize);
+    if (!read_buf) {
+        ALOGE("Failed to malloc read_buf");
+        close(fd);
+        return -ENOMEM;
+    }
+    memset(read_buf, 0x0, fileSize);
+    err = read(fd, read_buf, fileSize);
+    if (fd < 0) {
+        ALOGE("ERROR: failed to read config file %s error: %d\n", SOUND_CARDS_PATH, errno);
+        close(fd);
+        return -EINVAL;
+    }
+    pd = strstr(read_buf, "AML");
+    card = *(pd - 3) - '0';
+
+OUT:
+    free(read_buf);
+    close(fd);
+    return card;
+}
+
+static int get_pcm_bt_port(void)
+{
+    int port = -1, err = 0;
+    int fd = -1;
+    unsigned fileSize = 512;
+    char *read_buf = NULL, *pd = NULL;
+    static const char *const SOUND_PCM_PATH = "/proc/asound/pcm";
+    fd = open(SOUND_PCM_PATH, O_RDONLY);
+    if (fd < 0) {
+        ALOGE("ERROR: failed to open config file %s error: %d\n", SOUND_PCM_PATH, errno);
+        close(fd);
+        return -EINVAL;
+    }
+
+    read_buf = (char *)malloc(fileSize);
+    if (!read_buf) {
+        ALOGE("Failed to malloc read_buf");
+        close(fd);
+        return -ENOMEM;
+    }
+    memset(read_buf, 0x0, fileSize);
+    err = read(fd, read_buf, fileSize);
+    if (fd < 0) {
+        ALOGE("ERROR: failed to read config file %s error: %d\n", SOUND_PCM_PATH, errno);
+        close(fd);
+        return -EINVAL;
+    }
+    pd = strstr(read_buf, "pcm2bt-pcm");
+    port = *(pd + 11) - '0';
+
+OUT:
+    free(read_buf);
+    close(fd);
+    return port;
+}
+
+static int get_spdif_port()
+{
+    int port = -1, err = 0;
+    int fd = -1;
+    unsigned fileSize = 512;
+    char *read_buf = NULL, *pd = NULL;
+    static const char *const SOUND_PCM_PATH = "/proc/asound/pcm";
+    fd = open(SOUND_PCM_PATH, O_RDONLY);
+    if (fd < 0) {
+        ALOGE("ERROR: failed to open config file %s error: %d\n", SOUND_PCM_PATH, errno);
+        close(fd);
+        return -EINVAL;
+    }
+
+    read_buf = (char *)malloc(fileSize);
+    if (!read_buf) {
+        ALOGE("Failed to malloc read_buf");
+        close(fd);
+        return -ENOMEM;
+    }
+    memset(read_buf, 0x0, fileSize);
+    err = read(fd, read_buf, fileSize);
+    if (fd < 0) {
+        ALOGE("ERROR: failed to read config file %s error: %d\n", SOUND_PCM_PATH, errno);
+        close(fd);
+        return -EINVAL;
+    }
+    pd = strstr(read_buf, "SPDIF");
+    port = *(pd - 3) - '0';
+
+OUT:
+    free(read_buf);
+    close(fd);
+    return port;
+}
 /* must be called with hw device and output stream mutexes locked */
 static int start_output_stream(struct aml_stream_out *out)
 {
@@ -511,6 +662,7 @@ static int start_output_stream_direct(struct aml_stream_out *out)
         out->spdif_enc_init_frame_write_sum = out->frame_write_sum;
     }
     out->codec_type = codec_type;
+    out->bytes_write_total = 0;
 
     if (out->hw_sync_mode == 1) {
         LOGFUNC("start_output_stream with hw sync enable %p\n", out);
@@ -634,7 +786,7 @@ static int get_playback_delay(struct aml_stream_out *out,
                               struct echo_reference_buffer *buffer)
 {
 
-    unsigned int kernel_frames;
+    size_t kernel_frames;
     int status;
     status = pcm_get_htimestamp(out->pcm, &kernel_frames, &buffer->time_stamp);
     if (status < 0) {
@@ -676,8 +828,7 @@ static size_t out_get_buffer_size(const struct audio_stream *stream)
 {
     struct aml_stream_out *out = (struct aml_stream_out *)stream;
 
-    ALOGV("%s(out->config.rate=%d, format %x)", __FUNCTION__,
-        out->config.rate, out->hal_format);
+    //LOGFUNC("%s(out->config.rate=%d)", __FUNCTION__, out->config.rate);
 
     /* take resampling into account and return the closest majoring
      * multiple of 16 frames, as audioflinger expects audio buffers to
@@ -690,14 +841,14 @@ static size_t out_get_buffer_size(const struct audio_stream *stream)
         if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
             size = 4 * PERIOD_SIZE * PLAYBACK_PERIOD_COUNT;
         } else {
-            size = PERIOD_SIZE;
+            size = PLAYBACK_PERIOD_COUNT * PERIOD_SIZE / 2;
         }
         break;
     case AUDIO_FORMAT_E_AC3:
         if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
             size = 16 * PERIOD_SIZE * PLAYBACK_PERIOD_COUNT;
         } else {
-            size = PLAYBACK_PERIOD_COUNT*PERIOD_SIZE;   //PERIOD_SIZE;
+            size = PERIOD_SIZE;    //2*PLAYBACK_PERIOD_COUNT*PERIOD_SIZE;
         }
         break;
     case AUDIO_FORMAT_DTS_HD:
@@ -834,7 +985,6 @@ static int do_output_standby_direct(struct aml_stream_out *out)
         pcm_close(out->pcm);
         out->pcm = NULL;
     }
-    out->pause_status = false;
     set_codec_type(TYPE_PCM);
     /* clear the hdmitx channel config to default */
     if (out->multich == 6) {
@@ -874,7 +1024,6 @@ static int out_standby_direct(struct audio_stream *stream)
         pcm_close(out->pcm);
         out->pcm = NULL;
     }
-    out->pause_status = false;
     set_codec_type(TYPE_PCM);
     /* clear the hdmitx channel config to default */
     if (out->multich == 6) {
@@ -917,10 +1066,6 @@ out_flush(struct audio_stream_out *stream)
     standy_func(out);
     out->frame_write_sum  = 0;
     out->last_frames_postion = 0;
-    out->spdif_enc_init_frame_write_sum =  0;
-    out->frame_skip_sum = 0;
-    out->skip_frame = 3;
-
 exit:
     pthread_mutex_unlock(&adev->lock);
     pthread_mutex_unlock(&out->lock);
@@ -1093,11 +1238,10 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
     if (ret >= 0) {
         int hw_sync_id = atoi(value);
         unsigned char sync_enable = (hw_sync_id == 12345678) ? 1 : 0;
-        audio_hwsync_t *hw_sync = &out->hwsync;
         ALOGI("(%p)set hw_sync_id %d,%s hw sync mode\n",
               out, hw_sync_id, sync_enable ? "enable" : "disable");
         out->hw_sync_mode = sync_enable;
-        hw_sync->first_apts_flag = false;
+        out->first_apts_flag = false;
         pthread_mutex_lock(&adev->lock);
         pthread_mutex_lock(&out->lock);
         out->frame_write_sum = 0;
@@ -1121,82 +1265,26 @@ exit:
     return ret;
 }
 
-static char *out_get_parameters(const struct audio_stream *stream, const char *keys)
+static char * out_get_parameters(const struct audio_stream *stream __unused, const char *keys __unused)
 {
-    char *cap = NULL;
-    char *para = NULL;
-    struct aml_stream_out *out = (struct aml_stream_out *) stream;
-    struct aml_audio_device *adev = out->dev;
-    ALOGI("out_get_parameters %s,out %p\n", keys, out);
-    if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES)) {
-        if (out->out_device & AUDIO_DEVICE_OUT_HDMI_ARC) {
-            cap = (char *)get_hdmi_arc_cap(adev->hdmi_arc_ad, HDMI_ARC_MAX_FORMAT, AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES);
-        } else {
-            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES);
-        }
-        if (cap) {
-            para = strdup(cap);
-            free(cap);
-        } else {
-            para = strdup("");
-        }
-        ALOGI("%s\n", para);
-        return para;
-    } else if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_CHANNELS)) {
-        if (out->out_device & AUDIO_DEVICE_OUT_HDMI_ARC) {
-            cap = (char *)get_hdmi_arc_cap(adev->hdmi_arc_ad, HDMI_ARC_MAX_FORMAT, AUDIO_PARAMETER_STREAM_SUP_CHANNELS);
-        } else {
-            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_CHANNELS);
-        }
-        if (cap) {
-            para = strdup(cap);
-            free(cap);
-        } else {
-            para = strdup("");
-        }
-        ALOGI("%s\n", para);
-        return para;
-    } else if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_FORMATS)) {
-        if (out->out_device & AUDIO_DEVICE_OUT_HDMI_ARC) {
-            cap = (char *)get_hdmi_arc_cap(adev->hdmi_arc_ad, HDMI_ARC_MAX_FORMAT, AUDIO_PARAMETER_STREAM_SUP_FORMATS);
-        } else {
-            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_FORMATS);
-        }
-        if (cap) {
-            para = strdup(cap);
-            free(cap);
-        } else {
-            para = strdup("");
-        }
-        ALOGI("%s\n", para);
-        return para;
-    }
     return strdup("");
-}
-
-static uint32_t out_get_latency_frames(const struct audio_stream_out *stream)
-{
-    const struct aml_stream_out *out = (const struct aml_stream_out *)stream;
-    snd_pcm_sframes_t frames = 0;
-    uint32_t whole_latency_frames;
-    int ret = 0;
-
-    whole_latency_frames = out->config.period_size * out->config.period_count;
-    if (!out->pcm || !pcm_is_ready(out->pcm)) {
-        return whole_latency_frames;
-    }
-    ret = pcm_ioctl(out->pcm, SNDRV_PCM_IOCTL_DELAY, &frames);
-    if (ret < 0) {
-        return whole_latency_frames;
-    }
-    return frames;
 }
 
 static uint32_t out_get_latency(const struct audio_stream_out *stream)
 {
     const struct aml_stream_out *out = (const struct aml_stream_out *)stream;
-    snd_pcm_sframes_t frames = out_get_latency_frames(stream);
-    return (frames * 1000) / out->config.rate;
+    uint32_t whole_latency;
+    int ret = 0;
+    snd_pcm_sframes_t frames = 0;
+    whole_latency = (out->config.period_size * out->config.period_count * 1000) / out->config.rate;
+    if (!out->pcm || !pcm_is_ready(out->pcm)) {
+        return whole_latency;
+    }
+    ret = pcm_ioctl(out->pcm, SNDRV_PCM_IOCTL_DELAY, &frames);
+    if (ret < 0) {
+        return whole_latency;
+    }
+    return (frames * 1000) / out->config.rate/* (out->pcm->config.rate)*/;
 }
 
 static int out_set_volume(struct audio_stream_out *stream, float left, float right)
@@ -1327,7 +1415,6 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
     uint32_t latency_frames = 0;
     int need_mix = 0;
     short *mix_buf = NULL;
-    audio_hwsync_t *hw_sync = &out->hwsync;
     unsigned char enable_dump = getprop_bool("media.audiohal.outdump");
     // limit HAL mixer buffer level within 200ms
     while ((adev->hwsync_output != NULL && adev->hwsync_output != out) &&
@@ -1391,9 +1478,9 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
     }
     if ((out->standby) && (out->hw_sync_mode == 1)) {
         // todo: check timestamp header PTS discontinue for new sync point after seek
-        hw_sync->first_apts_flag = false;
-        hw_sync->hw_sync_state = HW_SYNC_STATE_HEADER;
-        hw_sync->hw_sync_header_cnt = 0;
+        out->first_apts_flag = false;
+        out->hw_sync_state = HW_SYNC_STATE_HEADER;
+        out->hw_sync_header_cnt = 0;
     }
 
 #if 1
@@ -1410,20 +1497,20 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
         char buf[64] = {0};
         unsigned char *header;
 
-        if (hw_sync->hw_sync_state == HW_SYNC_STATE_RESYNC) {
+        if (out->hw_sync_state == HW_SYNC_STATE_RESYNC) {
             uint i = 0;
             uint8_t *p = (uint8_t *)buffer;
             while (i < bytes) {
                 if (hwsync_header_valid(p)) {
                     ALOGI("HWSYNC resync.%p", out);
-                    hw_sync->hw_sync_state = HW_SYNC_STATE_HEADER;
-                    hw_sync->hw_sync_header_cnt = 0;
-                    hw_sync->first_apts_flag = false;
+                    out->hw_sync_state = HW_SYNC_STATE_HEADER;
+                    out->hw_sync_header_cnt = 0;
+                    out->first_apts_flag = false;
                     bytes -= i;
-                    p += i;
+                    buffer += i;
                     in_frames = bytes / frame_size;
-                    ALOGI("in_frames = %zu", in_frames);
-                    in_buffer = (int16_t *)p;
+                    ALOGI("in_frames = %d", in_frames);
+                    in_buffer = (int16_t *)buffer;
                     break;
                 } else {
                     i += 4;
@@ -1431,7 +1518,7 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
                 }
             }
 
-            if (hw_sync->hw_sync_state == HW_SYNC_STATE_RESYNC) {
+            if (out->hw_sync_state == HW_SYNC_STATE_RESYNC) {
                 ALOGI("Keep searching for HWSYNC header.%p", out);
                 pthread_mutex_unlock(&adev->lock);
                 goto exit;
@@ -1535,64 +1622,62 @@ if (!(adev->out_device & AUDIO_DEVICE_OUT_ALL_SCO)) {
     } else {
         if (out->hw_sync_mode) {
 
-            size_t remain = out_frames * frame_size;
-            uint8_t *p = (uint8_t *)buffer;
+            int remain = out_frames * frame_size;
+            uint8_t *p = buffer;
 
             //ALOGI(" --- out_write %d, cache cnt = %d, body = %d, hw_sync_state = %d", out_frames * frame_size, out->body_align_cnt, out->hw_sync_body_cnt, out->hw_sync_state);
 
             while (remain > 0) {
-                if (hw_sync->hw_sync_state == HW_SYNC_STATE_HEADER) {
+                if (out->hw_sync_state == HW_SYNC_STATE_HEADER) {
                     //ALOGI("Add to header buffer [%d], 0x%x", out->hw_sync_header_cnt, *p);
-                    out->hwsync.hw_sync_header[out->hwsync.hw_sync_header_cnt++] = *p++;
+                    out->hw_sync_header[out->hw_sync_header_cnt++] = *p++;
                     remain--;
-                    if (hw_sync->hw_sync_header_cnt == 16) {
-                        uint64_t pts;
-                        if (!hwsync_header_valid(&hw_sync->hw_sync_header[0])) {
+                    if (out->hw_sync_header_cnt == 16) {
+                        int64_t pts;
+                        if (!hwsync_header_valid(&out->hw_sync_header[0])) {
                             ALOGE("hwsync header out of sync! Resync.");
-                            hw_sync->hw_sync_state = HW_SYNC_STATE_RESYNC;
+                            out->hw_sync_state = HW_SYNC_STATE_RESYNC;
                             break;
                         }
-                        hw_sync->hw_sync_state = HW_SYNC_STATE_BODY;
-                        hw_sync->hw_sync_body_cnt = hwsync_header_get_size(&hw_sync->hw_sync_header[0]);
-                        hw_sync->body_align_cnt = 0;
-                        pts = hwsync_header_get_pts(&hw_sync->hw_sync_header[0]);
+                        out->hw_sync_state = HW_SYNC_STATE_BODY;
+                        out->hw_sync_body_cnt = hwsync_header_get_size(&out->hw_sync_header[0]);
+                        out->body_align_cnt = 0;
+                        pts = hwsync_header_get_pts(&out->hw_sync_header[0]);
                         pts = pts * 90 / 1000000;
 #if 1
                         char buf[64] = {0};
-                        if (hw_sync->first_apts_flag == false) {
+                        if (out->first_apts_flag == false) {
                             uint32_t apts_cal;
-                            ALOGI("HW SYNC new first APTS %zd,body size %zu", pts, hw_sync->hw_sync_body_cnt);
-                            hw_sync->first_apts_flag = true;
-                            hw_sync->first_apts = pts;
+                            ALOGI("HW SYNC new first APTS %lld,body size %d", pts, out->hw_sync_body_cnt);
+                            out->first_apts_flag = true;
+                            out->first_apts = pts;
                             out->frame_write_sum = 0;
-                            hw_sync->last_apts_from_header =    pts;
-                            sprintf(buf, "AUDIO_START:0x%"PRIx64"", pts & 0xffffffff);
+                            out->last_apts_from_header =    pts;
+                            sprintf(buf, "AUDIO_START:0x%llx", pts & 0xffffffff);
                             ALOGI("tsync -> %s", buf);
                             if (sysfs_set_sysfs_str(TSYNC_EVENT, buf) == -1) {
                                 ALOGE("set AUDIO_START failed \n");
                             }
                         } else {
-                            uint64_t apts;
-                            uint32_t latency = out_get_latency(stream) * 90;
+                            int64_t apts;
+                            uint32_t latency = out_get_latency(out) * 90;
                             apts = (uint64_t)out->frame_write_sum * 90000 / DEFAULT_OUT_SAMPLING_RATE;
-                            apts += hw_sync->first_apts;
+                            apts += out->first_apts;
                             // check PTS discontinue, which may happen when audio track switching
                             // discontinue means PTS calculated based on first_apts and frame_write_sum
                             // does not match the timestamp of next audio samples
-                            if (apts > latency) {
-                                apts -= latency;
-                            } else {
+                            apts -= latency;
+                            if (apts < 0) {
                                 apts = 0;
                             }
-
                             // here we use acutal audio frame gap,not use the differece of  caculated current apts with the current frame pts,
                             //as there is a offset of audio latency from alsa.
                             // handle audio gap 0.5~5 s
-                            uint64_t two_frame_gap = pts_abs(hw_sync->last_apts_from_header, pts);
+                            unsigned two_frame_gap = (unsigned)llabs(out->last_apts_from_header - pts);
                             if (two_frame_gap > APTS_DISCONTINUE_THRESHOLD_MIN  && two_frame_gap < APTS_DISCONTINUE_THRESHOLD_MAX) {
                                 /*   if (abs(pts -apts) > APTS_DISCONTINUE_THRESHOLD_MIN && abs(pts -apts) < APTS_DISCONTINUE_THRESHOLD_MAX) { */
-                                ALOGI("HW sync PTS discontinue, 0x%"PRIx64"->0x%"PRIx64"(from header) diff %"PRIx64",last apts %"PRIx64"(from header)",
-                                      apts, pts, two_frame_gap, hw_sync->last_apts_from_header);
+                                ALOGI("HW sync PTS discontinue, 0x%llx->0x%llx(from header) diff %d,last apts %llx(from header)",
+                                      apts, pts, two_frame_gap, out->last_apts_from_header);
                                 //here handle the audio gap and insert zero to the alsa
                                 uint insert_size = 0;
                                 uint insert_size_total = 0;
@@ -1600,7 +1685,7 @@ if (!(adev->out_device & AUDIO_DEVICE_OUT_ALL_SCO)) {
                                 insert_size = two_frame_gap/*abs(pts -apts) */ / 90 * 48 * 4;
                                 insert_size = insert_size & (~63);
                                 insert_size_total = insert_size;
-                                ALOGI("audio gap %"PRIx64" ms ,need insert pcm size %d\n", two_frame_gap/*abs(pts -apts) */ / 90, insert_size);
+                                ALOGI("audio gap %d ms ,need insert pcm size %d\n", two_frame_gap/*abs(pts -apts) */ / 90, insert_size);
                                 char *insert_buf = (char*)malloc(8192);
                                 if (insert_buf == NULL) {
                                     ALOGE("malloc size failed \n");
@@ -1670,7 +1755,7 @@ if (!(adev->out_device & AUDIO_DEVICE_OUT_ALL_SCO)) {
                                         // do nothing
                                     } else {
                                         sprintf(buf, "0x%x", apts_cal);
-                                        ALOGI("tsync -> reset pcrscr 0x%x -> 0x%x, diff %d ms,frame pts %"PRIx64",latency pts %d", pcr, apts_cal, (int)(apts_cal - pcr) / 90, pts, latency);
+                                        ALOGI("tsync -> reset pcrscr 0x%x -> 0x%x, diff %d ms,frame pts %llx,latency pts %d", pcr, apts_cal, (int)(apts_cal - pcr) / 90, pts, latency);
                                         int ret_val = sysfs_set_sysfs_str(TSYNC_APTS, buf);
                                         if (ret_val == -1) {
                                             ALOGE("unable to open file %s,err: %s", TSYNC_APTS, strerror(errno));
@@ -1678,48 +1763,48 @@ if (!(adev->out_device & AUDIO_DEVICE_OUT_ALL_SCO)) {
                                     }
                                 }
                             }
-                            hw_sync->last_apts_from_header = pts;
+                            out->last_apts_from_header = pts;
                         }
 #endif
 
                         //ALOGI("get header body_cnt = %d, pts = %lld", out->hw_sync_body_cnt, pts);
                     }
                     continue;
-                } else if (hw_sync->hw_sync_state == HW_SYNC_STATE_BODY) {
+                } else if (out->hw_sync_state == HW_SYNC_STATE_BODY) {
                     uint align;
-                    uint m = (hw_sync->hw_sync_body_cnt < remain) ? hw_sync->hw_sync_body_cnt : remain;
+                    uint m = (out->hw_sync_body_cnt < remain) ? out->hw_sync_body_cnt : remain;
 
                     //ALOGI("m = %d", m);
 
                     // process m bytes, upto end of hw_sync_body_cnt or end of remaining our_write bytes.
                     // within m bytes, there is no hw_sync header and all are body bytes.
-                    if (hw_sync->body_align_cnt) {
+                    if (out->body_align_cnt) {
                         // clear fragment first for alignment limitation on ALSA driver, which
                         // requires each pcm_writing aligned at 16 frame boundaries
                         // assuming data are always PCM16 based, so aligned at 64 bytes unit.
-                        if ((m + hw_sync->body_align_cnt) < 64) {
+                        if ((m + out->body_align_cnt) < 64) {
                             // merge only
-                            memcpy(&hw_sync->body_align[hw_sync->body_align_cnt], p, m);
+                            memcpy(&out->body_align[out->body_align_cnt], p, m);
                             p += m;
                             remain -= m;
-                            hw_sync->body_align_cnt += m;
-                            hw_sync->hw_sync_body_cnt -= m;
-                            if (hw_sync->hw_sync_body_cnt == 0) {
+                            out->body_align_cnt += m;
+                            out->hw_sync_body_cnt -= m;
+                            if (out->hw_sync_body_cnt == 0) {
                                 // end of body, research for HW SYNC header
-                                hw_sync->hw_sync_state = HW_SYNC_STATE_HEADER;
-                                hw_sync->hw_sync_header_cnt = 0;
+                                out->hw_sync_state = HW_SYNC_STATE_HEADER;
+                                out->hw_sync_header_cnt = 0;
                                 continue;
                             }
                             //ALOGI("align cache add %d, cnt = %d", remain, out->body_align_cnt);
                             break;
                         } else {
                             // merge-submit-continue
-                            memcpy(&hw_sync->body_align[hw_sync->body_align_cnt], p, 64 - hw_sync->body_align_cnt);
-                            p += 64 - hw_sync->body_align_cnt;
-                            remain -= 64 - hw_sync->body_align_cnt;
+                            memcpy(&out->body_align[out->body_align_cnt], p, 64 - out->body_align_cnt);
+                            p += 64 - out->body_align_cnt;
+                            remain -= 64 - out->body_align_cnt;
                             //ALOGI("pcm_write 64, out remain %d", remain);
 
-                            short *w_buf = (short*)&hw_sync->body_align[0];
+                            short *w_buf = (short*)&out->body_align[0];
 
                             if (need_mix) {
                                 short mix_buf[32];
@@ -1756,11 +1841,11 @@ if (!(adev->out_device & AUDIO_DEVICE_OUT_ALL_SCO)) {
                             ret = pcm_write(out->pcm, w_buf, 64);
                             pthread_mutex_unlock(&adev->pcm_write_lock);
                             out->frame_write_sum += 64 / frame_size;
-                            hw_sync->hw_sync_body_cnt -= 64 - hw_sync->body_align_cnt;
-                            hw_sync->body_align_cnt = 0;
-                            if (hw_sync->hw_sync_body_cnt == 0) {
-                                hw_sync->hw_sync_state = HW_SYNC_STATE_HEADER;
-                                hw_sync->hw_sync_header_cnt = 0;
+                            out->hw_sync_body_cnt -= 64 - out->body_align_cnt;
+                            out->body_align_cnt = 0;
+                            if (out->hw_sync_body_cnt == 0) {
+                                out->hw_sync_state = HW_SYNC_STATE_HEADER;
+                                out->hw_sync_header_cnt = 0;
                             }
                             continue;
                         }
@@ -1816,25 +1901,25 @@ if (!(adev->out_device & AUDIO_DEVICE_OUT_ALL_SCO)) {
                         remain -= m - align;
                         //ALOGI("pcm_write %d, remain %d", m - align, remain);
 
-                        hw_sync->hw_sync_body_cnt -= (m - align);
-                        if (hw_sync->hw_sync_body_cnt == 0) {
-                            hw_sync->hw_sync_state = HW_SYNC_STATE_HEADER;
-                            hw_sync->hw_sync_header_cnt = 0;
+                        out->hw_sync_body_cnt -= (m - align);
+                        if (out->hw_sync_body_cnt == 0) {
+                            out->hw_sync_state = HW_SYNC_STATE_HEADER;
+                            out->hw_sync_header_cnt = 0;
                             continue;
                         }
                     }
 
                     if (align) {
-                        memcpy(&hw_sync->body_align[0], p, align);
+                        memcpy(&out->body_align[0], p, align);
                         p += align;
                         remain -= align;
-                        hw_sync->body_align_cnt = align;
+                        out->body_align_cnt = align;
                         //ALOGI("align cache add %d, cnt = %d, remain = %d", align, out->body_align_cnt, remain);
 
-                        hw_sync->hw_sync_body_cnt -= align;
-                        if (hw_sync->hw_sync_body_cnt == 0) {
-                            hw_sync->hw_sync_state = HW_SYNC_STATE_HEADER;
-                            hw_sync->hw_sync_header_cnt = 0;
+                        out->hw_sync_body_cnt -= align;
+                        if (out->hw_sync_body_cnt == 0) {
+                            out->hw_sync_state = HW_SYNC_STATE_HEADER;
+                            out->hw_sync_header_cnt = 0;
                             continue;
                         }
                     }
@@ -1862,8 +1947,7 @@ if (!(adev->out_device & AUDIO_DEVICE_OUT_ALL_SCO)) {
     }
 
 exit:
-    clock_gettime(CLOCK_MONOTONIC, &out->timestamp);
-    latency_frames = out_get_latency_frames(stream);
+    latency_frames = out_get_latency(out) * out->config.rate / 1000;
     if (out->frame_write_sum >= latency_frames) {
         out->last_frames_postion = out->frame_write_sum - latency_frames;
     } else {
@@ -2007,7 +2091,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
     out->frame_write_sum += out_frames;
 
 exit:
-    latency_frames = out_get_latency(stream) * out->config.rate / 1000;
+    latency_frames = out_get_latency(out) * out->config.rate / 1000;
     if (out->frame_write_sum >= latency_frames) {
         out->last_frames_postion = out->frame_write_sum - latency_frames;
     } else {
@@ -2047,24 +2131,24 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
     char prop[PROPERTY_VALUE_MAX];
     int codec_type = out->codec_type;
     int samesource_flag = 0;
-    uint32_t latency_frames = 0;
+    uint32_t latency_frames;
     uint64_t total_frame = 0;
-    audio_hwsync_t *hw_sync = &out->hwsync;
+    audio_hwsync_t  *p_hwsync = &adev->hwsync;
     /* acquiring hw device mutex systematically is useful if a low priority thread is waiting
     * on the output stream mutex - e.g. executing select_mode() while holding the hw device
     * mutex
     */
-    ALOGV("out_write_direct:out %p,position %zu, out_write size %"PRIu64,
-            out, bytes, out->frame_write_sum);
+    out->bytes_write_total += bytes;
+    ALOGV("out %p,dev %p out_write total size %lld\n", out, adev, out->bytes_write_total);
     pthread_mutex_lock(&adev->lock);
     pthread_mutex_lock(&out->lock);
     if (out->pause_status == true) {
         pthread_mutex_unlock(&adev->lock);
         pthread_mutex_unlock(&out->lock);
-        ALOGI("call out_write when pause status,size %zu,(%p)\n", bytes, out);
+        ALOGI("call out_write when pause status,size %d,(%p)\n", bytes, out);
         return 0;
     }
-    if ((out->standby) && out->hw_sync_mode) {
+    if ((out->standby) && adev->hw_sync_mode) {
         /*
         there are two types of raw data come to hdmi  audio hal
         1) compressed audio data without IEC61937 wrapped
@@ -2093,20 +2177,20 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
         }
     }
     void *write_buf = NULL;
-    size_t  hwsync_cost_bytes = 0;
-    if (out->hw_sync_mode == 1) {
-        uint64_t  cur_pts = 0xffffffff;
+    int  hwsync_cost_bytes = 0;
+    if (adev->hw_sync_mode == 1) {
+        int64_t  cur_pts = 0xffffffff;
         int outsize = 0;
         char tempbuf[128];
-        ALOGV("before aml_audio_hwsync_find_frame bytes %zu\n", bytes);
+        ALOGV("before aml_audio_hwsync_find_frame bytes %d\n", bytes);
         hwsync_cost_bytes = aml_audio_hwsync_find_frame(out, buffer, bytes, &cur_pts, &outsize);
-        ALOGV("after aml_audio_hwsync_find_frame bytes remain %zu,cost %zu,outsize %d,pts %"PRIx64"\n",
+        ALOGV("after aml_audio_hwsync_find_frame bytes remain %d,cost %d,outsize %d,pts %llx\n",
               bytes - hwsync_cost_bytes, hwsync_cost_bytes, outsize, cur_pts);
         //TODO,skip 3 frames after flush, to tmp fix seek pts discontinue issue.need dig more
         // to find out why seek ppint pts frame is remained after flush.WTF.
         if (out->skip_frame > 0) {
             out->skip_frame--;
-            ALOGI("skip pts@%"PRIx64",cur frame size %d,cost size %zu\n", cur_pts, outsize, hwsync_cost_bytes);
+            ALOGI("skip pts@%llx,cur frame size %d,cost size %d\n", cur_pts, outsize, hwsync_cost_bytes);
             pthread_mutex_unlock(&adev->lock);
             pthread_mutex_unlock(&out->lock);
             return hwsync_cost_bytes;
@@ -2115,38 +2199,38 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
             // if we got the frame body,which means we get a complete frame.
             //we take this frame pts as the first apts.
             //this can fix the seek discontinue,we got a fake frame,which maybe cached before the seek
-            if (hw_sync->first_apts_flag == false) {
-                hw_sync->first_apts_flag = true;
-                hw_sync->first_apts = cur_pts;
-                sprintf(tempbuf, "AUDIO_START:0x%"PRIx64"", cur_pts & 0xffffffff);
+            if (p_hwsync->first_apts_flag == false) {
+                p_hwsync->first_apts_flag = true;
+                p_hwsync->first_apts = cur_pts;
+                sprintf(tempbuf, "AUDIO_START:0x%llx", cur_pts & 0xffffffff);
                 ALOGI("tsync -> %s,frame size %d", tempbuf, outsize);
                 if (sysfs_set_sysfs_str(TSYNC_EVENT, tempbuf) == -1) {
                     ALOGE("set AUDIO_START failed \n");
                 }
             } else {
-                uint64_t apts;
-                uint64_t latency = out_get_latency(stream) * 90;
+                long apts;
+                unsigned long latency = out_get_latency(out) * 90;
                 // check PTS discontinue, which may happen when audio track switching
                 // discontinue means PTS calculated based on first_apts and frame_write_sum
                 // does not match the timestamp of next audio samples
                 if (cur_pts >  latency) {
-                    apts = cur_pts - latency;
+                    apts = (unsigned long)cur_pts - latency;
                 } else {
                     apts = 0;
                 }
                 if (0) { //abs(cur_pts -apts) > APTS_DISCONTINUE_THRESHOLD) {
-                    ALOGI("HW sync PTS discontinue, 0x%"PRIx64"->0x%"PRIx64"(from header) diff %"PRIx64",last apts %"PRIx64"(from header)",
-                          apts, cur_pts, pts_abs(cur_pts, apts), hw_sync->last_apts_from_header);
-                    hw_sync->first_apts = cur_pts;
-                    sprintf(tempbuf, "AUDIO_TSTAMP_DISCONTINUITY:0x%"PRIx64"", cur_pts);
+                    ALOGI("HW sync PTS discontinue, 0x%lx->0x%llx(from header) diff %llx,last apts %llx(from header)",
+                          apts, cur_pts, llabs(cur_pts - apts), p_hwsync->last_apts_from_header);
+                    p_hwsync->first_apts = cur_pts;
+                    sprintf(tempbuf, "AUDIO_TSTAMP_DISCONTINUITY:0x%llx", cur_pts);
                     if (sysfs_set_sysfs_str(TSYNC_EVENT, tempbuf) == -1) {
                         ALOGE("unable to open file %s,err: %s", TSYNC_EVENT, strerror(errno));
                     }
                 } else {
-                    int pcr = 0;
+                    long pcr = 0;
                     if (get_sysfs_int16(TSYNC_PCRSCR, &pcr) == 0) {
                         uint32_t apts_cal = apts & 0xffffffff;
-                        if (pts_abs(pcr, apts) < SYSTIME_CORRECTION_THRESHOLD) {
+                        if (abs(pcr - apts) < SYSTIME_CORRECTION_THRESHOLD) {
                             // do nothing
                         }
                         // limit the gap handle to 0.5~5 s.
@@ -2154,12 +2238,12 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
                             int insert_size = 0;
                             int once_write_size = 0;
                             if (out->codec_type == TYPE_EAC3) {
-                                insert_size = pts_abs(apts, pcr) / 90 * 48 * 4 * 4;
+                                insert_size = abs(apts - pcr) / 90 * 48 * 4 * 4;
                             } else {
-                                insert_size = pts_abs(apts, pcr) / 90 * 48 * 4;
+                                insert_size = abs(apts - pcr) / 90 * 48 * 4;
                             }
                             insert_size = insert_size & (~63);
-                            ALOGI("audio gap %"PRIx64" ms ,need insert data %d\n", pts_abs(apts, pcr) / 90, insert_size);
+                            ALOGI("audio gap %d ms ,need insert data %d\n", abs(apts - pcr) / 90, insert_size);
                             char *insert_buf = (char*)malloc(8192);
                             if (insert_buf == NULL) {
                                 ALOGE("malloc size failed \n");
@@ -2184,15 +2268,15 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
                         else if ((pcr - apts) > APTS_DISCONTINUE_THRESHOLD_MIN && (pcr - apts) < APTS_DISCONTINUE_THRESHOLD_MAX) {
                             //we assume one frame duration is 32 ms for DD+(6 blocks X 1536 frames,48K sample rate)
                             if (out->codec_type == TYPE_EAC3 && outsize > 0) {
-                                ALOGI("audio slow 0x%"PRIx64",skip frame @pts 0x%"PRIx64",pcr 0x%x,cur apts 0x%"PRIx64"\n", (pcr - apts), cur_pts, pcr, apts);
+                                ALOGI("audio slow 0x%lx,skip frame @pts 0x%llx,pcr 0x%lx,cur apts 0x%lx\n", (pcr - apts), cur_pts, pcr, apts);
                                 out->frame_skip_sum  +=   1536;
                                 bytes =   outsize;
                                 pthread_mutex_unlock(&adev->lock);
                                 goto exit;
                             }
                         } else {
-                            sprintf(tempbuf, "0x%"PRIx64"", apts);
-                            ALOGI("tsync -> reset pcrscr 0x%d -> 0x%"PRIx64", %s big,diff %"PRIx64" ms", pcr, apts, apts > (uint64_t)pcr ? "apts" : "pcr", pts_abs(apts, pcr) / 90);
+                            sprintf(tempbuf, "0x%lx", apts);
+                            ALOGI("tsync -> reset pcrscr 0x%lx -> 0x%lx, %s big,diff %d ms", pcr, apts, apts > pcr ? "apts" : "pcr", abs(apts - pcr) / 90);
 #if 0
                             int ret_val = sysfs_set_sysfs_str(TSYNC_APTS, tempbuf);
                             if (ret_val == -1) {
@@ -2206,7 +2290,7 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
         }
         if (outsize > 0) {
             in_frames = outsize / frame_size;
-            write_buf = hw_sync->hw_sync_body_buf;
+            write_buf = p_hwsync->hw_sync_body_buf;
         } else {
             bytes = hwsync_cost_bytes;
             pthread_mutex_unlock(&adev->lock);
@@ -2222,7 +2306,7 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
         FILE *fp1 = fopen("/data/tmp/hdmi_audio_out.pcm", "a+");
         if (fp1) {
             int flen = fwrite((char *)buffer, 1, out_frames * frame_size, fp1);
-            //LOGFUNC("flen = %d---outlen=%d ", flen, out_frames * frame_size);
+            LOGFUNC("flen = %d---outlen=%d ", flen, out_frames * frame_size);
             fclose(fp1);
         } else {
             LOGFUNC("could not open file:/data/hdmi_audio_out.pcm");
@@ -2230,21 +2314,21 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
     }
     if (codec_type_is_raw_data(out->codec_type) && !(out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO)) {
         //here to do IEC61937 pack
-        ALOGV("IEC61937 write size %zu,hw_sync_mode %d,flag %x\n", out_frames * frame_size, out->hw_sync_mode, out->flags);
+        ALOGV("IEC61937 write size %d,hw_sync_mode %d,flag %x\n", out_frames * frame_size, adev->hw_sync_mode, out->flags);
         if (out->codec_type  > 0) {
             // compressed audio DD/DD+
             bytes = spdifenc_write((void *) buf, out_frames * frame_size);
             //need return actual size of this burst write
-            if (out->hw_sync_mode == 1) {
+            if (adev->hw_sync_mode == 1) {
                 bytes = hwsync_cost_bytes;
             }
-            ALOGV("spdifenc_write return %zu\n", bytes);
+            ALOGV("spdifenc_write return %d\n", bytes);
             if (out->codec_type == TYPE_EAC3) {
                 out->frame_write_sum = spdifenc_get_total() / 16 + out->spdif_enc_init_frame_write_sum;
             } else {
                 out->frame_write_sum = spdifenc_get_total() / 4 + out->spdif_enc_init_frame_write_sum;
             }
-            ALOGV("out %p,out->frame_write_sum %"PRId64"\n", out, out->frame_write_sum);
+            ALOGV("out %p,spdifenc_get_total() / 4 %lld\n", out, spdifenc_get_total() / 16);
         }
         goto exit;
     }
@@ -2328,7 +2412,7 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
                 pcm_stop(out->pcm);
             }
 #endif
-            ALOGV("write size %zu\n", out_frames * frame_size);
+            ALOGV("write size %d\n", out_frames * frame_size);
             ret = pcm_write(out->pcm, (void *) buf, out_frames * frame_size);
             if (ret == 0) {
                 out->frame_write_sum += out_frames;
@@ -2337,20 +2421,17 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
     }
 exit:
     total_frame = out->frame_write_sum + out->frame_skip_sum;
-    latency_frames = out_get_latency_frames(stream);
-    clock_gettime(CLOCK_MONOTONIC, &out->timestamp);
+    latency_frames = out_get_latency(out) * out->config.rate / 1000;
     if (total_frame >= latency_frames) {
         out->last_frames_postion = total_frame - latency_frames;
     } else {
         out->last_frames_postion = total_frame;
     }
-    ALOGV("\nout %p,out->last_frames_postion %"PRId64", latency = %d\n", out, out->last_frames_postion, latency_frames);
     pthread_mutex_unlock(&out->lock);
     if (ret != 0) {
         usleep(bytes * 1000000 / audio_stream_out_frame_size(stream) /
                out_get_sample_rate(&stream->common));
     }
-
     return bytes;
 }
 
@@ -2373,7 +2454,7 @@ static int out_get_render_position(const struct audio_stream_out *stream,
         *dsp_frames = (uint32_t)(dsp_frame_int64 & 0xffffffff);
         if (out->last_dsp_frame > *dsp_frames) {
             ALOGI("maybe uint32_t wraparound,print something,last %u,now %u", out->last_dsp_frame, *dsp_frames);
-            ALOGI("wraparound,out_get_render_position return %u,playback time %"PRIu64" ms,sr %d\n", *dsp_frames,
+            ALOGI("wraparound,out_get_render_position return %u,playback time %llu ms,sr %d\n", *dsp_frames,
                   out->last_frames_postion * 1000 / out->raw_61937_frame_size / out->config.rate, out->config.rate);
 
         }
@@ -2402,18 +2483,17 @@ static int out_get_next_write_timestamp(const struct audio_stream_out *stream __
 static int out_get_presentation_position(const struct audio_stream_out *stream, uint64_t *frames, struct timespec *timestamp)
 {
     struct aml_stream_out *out = (struct aml_stream_out *)stream;
-
-    if (!frames || !timestamp) {
-        return -EINVAL;
+    if (frames != NULL) {
+        *frames = out->last_frames_postion;
     }
 
-    *frames = out->last_frames_postion;
-    *timestamp = out->timestamp;
-
+    if (timestamp != NULL) {
+        clock_gettime(CLOCK_MONOTONIC, timestamp);
+    }
     if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
-        *frames /= out->raw_61937_frame_size;
+        *frames = out->last_frames_postion / out->raw_61937_frame_size;
     }
-    ALOGV("out_get_presentation_position out %p %"PRIu64", sec = %ld, nanosec = %ld\n", out, *frames, timestamp->tv_sec, timestamp->tv_nsec);
+    ALOGV("out_get_presentation_position %lld\n", *frames);
 
     return 0;
 }
@@ -2659,7 +2739,7 @@ static void get_capture_delay(struct aml_stream_in *in,
                               struct echo_reference_buffer *buffer)
 {
     /* read frames available in kernel driver buffer */
-    uint kernel_frames;
+    size_t kernel_frames;
     struct timespec tstamp;
     long buf_delay;
     long rsmp_delay;
@@ -2705,8 +2785,8 @@ static int32_t update_echo_reference(struct aml_stream_in *in, size_t frames)
     struct echo_reference_buffer b;
     b.delay_ns = 0;
 
-    ALOGV("update_echo_reference, frames = [%zu], in->ref_frames_in = [%zu],  "
-          "b.frame_count = [%zu]", frames, in->ref_frames_in, frames - in->ref_frames_in);
+    ALOGV("update_echo_reference, frames = [%d], in->ref_frames_in = [%d],  "
+          "b.frame_count = [%d]", frames, in->ref_frames_in, frames - in->ref_frames_in);
     if (in->ref_frames_in < frames) {
         if (in->ref_buf_size < frames) {
             in->ref_buf_size = frames;
@@ -2722,8 +2802,8 @@ static int32_t update_echo_reference(struct aml_stream_in *in, size_t frames)
 
         if (in->echo_reference->read(in->echo_reference, &b) == 0) {
             in->ref_frames_in += b.frame_count;
-            ALOGV("update_echo_reference: in->ref_frames_in:[%zu], "
-                  "in->ref_buf_size:[%zu], frames:[%zu], b.frame_count:[%zu]",
+            ALOGV("update_echo_reference: in->ref_frames_in:[%d], "
+                  "in->ref_buf_size:[%d], frames:[%d], b.frame_count:[%d]",
                   in->ref_frames_in, in->ref_buf_size, frames, b.frame_count);
         }
     } else {
@@ -2915,7 +2995,7 @@ static ssize_t process_frames(struct aml_stream_in *in, void* buffer, ssize_t fr
                 in->proc_buf = (int16_t *)realloc(in->proc_buf,
                                                   in->proc_buf_size *
                                                   in->config.channels * sizeof(int16_t));
-                ALOGV("process_frames(): in->proc_buf %p size extended to %zu frames",
+                ALOGV("process_frames(): in->proc_buf %p size extended to %d frames",
                       in->proc_buf, in->proc_buf_size);
             }
             frames_rd = read_frames(in,
@@ -3132,7 +3212,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     bool direct = false;
     int ret;
     bool hwsync_lpcm = false;
-    ALOGI("enter %s(devices=0x%04x,format=%#x, ch=0x%04x, SR=%d, flags=0x%x)", __FUNCTION__, devices,
+    ALOGI("**enter %s(devices=0x%04x,format=%#x, ch=0x%04x, SR=%d, flags=0x%x)", __FUNCTION__, devices,
           config->format, config->channel_mask, config->sample_rate, flags);
 
     out = (struct aml_stream_out *)calloc(1, sizeof(struct aml_stream_out));
@@ -3140,7 +3220,6 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
         return -ENOMEM;
     }
 
-    out->out_device = devices;
     out->flags = flags;
     if (getprop_bool("ro.platform.has.tvuimode")) {
         out->is_tv_platform = 1;
@@ -3165,11 +3244,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
         out->stream.common.get_format = out_get_format_direct;
         out->stream.write = out_write_direct;
         out->stream.common.standby = out_standby_direct;
-        if (config->format == AUDIO_FORMAT_DEFAULT) {
-            config->format = AUDIO_FORMAT_AC3;
-        }
-        /* set default pcm config for direct. */
-        out->config = pcm_config_out_direct;
+        //out->config = pcm_config_out_direct;
         out->hal_channel_mask = config->channel_mask;
         if (config->sample_rate == 0) {
             config->sample_rate = 48000;
@@ -3180,9 +3255,9 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
         digital_codec = get_codec_type(config->format);
         if (digital_codec == TYPE_EAC3) {
             out->raw_61937_frame_size = 4;
-            out->config.period_size = pcm_config_out_direct.period_size * 2;
+            out->config.period_size = pcm_config_out.period_size * 2;
         } else if (digital_codec == TYPE_TRUE_HD || digital_codec == TYPE_DTS_HD) {
-            out->config.period_size = pcm_config_out_direct.period_size * 4 * 2;
+            out->config.period_size = pcm_config_out.period_size * 4 * 2;
             out->raw_61937_frame_size = 16;
         }
         else if (digital_codec == TYPE_AC3 || digital_codec == TYPE_DTS)
@@ -3198,13 +3273,10 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
             ALOGI("for raw audio output,force alsa stereo output\n");
             out->config.channels = 2;
             out->multich = 2;
-            out->hal_channel_mask = AUDIO_CHANNEL_OUT_STEREO;
-            //config->channel_mask = AUDIO_CHANNEL_OUT_STEREO;
         }
-    } else {
-        // TODO: add other cases here
-        ALOGE("DO not support yet!!");
-        return -EINVAL;
+    } else if (flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC) {
+        // TODO: add hwsync write here
+        //out->stream.write = out_write_hwsync;
     }
 
     out->stream.common.get_sample_rate = out_get_sample_rate;
@@ -3231,7 +3303,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     out->standby = true;
     out->frame_write_sum = 0;
     out->hw_sync_mode = false;
-    out->hwsync.first_apts_flag = false;
+    out->first_apts_flag = false;
     //out->hal_rate = out->config.rate;
     if (0/*flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC*/) {
         out->hw_sync_mode = true;
@@ -3368,9 +3440,6 @@ static char * adev_get_parameters(const struct audio_hw_device *dev __unused,
     if (!strcmp(keys, AUDIO_PARAMETER_HW_AV_SYNC)) {
         ALOGI("get hwsync id\n");
         return strdup("hw_av_sync=12345678");
-    }
-    if (!strcmp(keys, AUDIO_PARAMETER_HW_AV_EAC3_SYNC)) {
-        return strdup("true");
     }
     return strdup("");
 }

@@ -31,8 +31,7 @@ ifeq ($(strip $(BOARD_ALSA_AUDIO)),tiny)
 		libTVaudio/audio/audio_effect_control.c \
 		audio_hw_utils.c \
 		audio_hwsync.c \
-		spdifenc_wrap.cpp \
-		audio_hw_profile.c
+		//spdifenc_wrap.cpp
 	LOCAL_C_INCLUDES += \
 		external/tinyalsa/include \
 		system/media/audio_utils/include \

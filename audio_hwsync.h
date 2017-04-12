@@ -16,9 +16,9 @@
 
 typedef struct  audio_hwsync {
     uint8_t hw_sync_header[16];
-    size_t hw_sync_header_cnt;
+    int hw_sync_header_cnt;
     int hw_sync_state;
-    size_t hw_sync_body_cnt;
+    int hw_sync_body_cnt;
     int hw_sync_frame_size;
     uint8_t hw_sync_body_buf[4096];
     uint8_t body_align[64];
@@ -55,17 +55,4 @@ static inline uint32_t hwsync_header_get_size(uint8_t *header)
            ((uint32_t)header[7]);
 }
 
-static inline uint64_t pts_abs(uint64_t a, uint64_t b)
-{
-    if (a >= b)
-        return (a - b);
-    else
-        return (b - a);
-}
-
-struct aml_stream_out;
-
-void aml_audio_hwsync_clear_status(struct aml_stream_out *out);
-int aml_audio_hwsync_find_frame(struct aml_stream_out *out,
-                                        const void *in_buffer, size_t in_bytes, uint64_t *cur_pts, int *outsize);
 #endif
