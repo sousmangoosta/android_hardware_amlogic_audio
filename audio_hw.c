@@ -3251,7 +3251,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
 
     *stream_out = &out->stream;
 
-    if (out->is_tv_platform && !(flags & AUDIO_OUTPUT_FLAG_DIRECT)) {
+    if (out->is_tv_platform) {
         out->config.channels = 8;
         out->config.format = PCM_FORMAT_S32_LE;
         out->tmp_buffer_8ch = malloc(out->config.period_size * 4 * 8);

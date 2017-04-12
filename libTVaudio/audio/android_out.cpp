@@ -30,6 +30,7 @@ extern struct circle_buffer DDP_out_buffer;
 extern struct circle_buffer DD_out_buffer;
 extern int output_record_enable;
 extern int spdif_audio_type;
+extern pthread_mutex_t device_change_lock;
 
 int I2S_state = 0;
 static int raw_start_flag = 0;
@@ -103,7 +104,7 @@ static void AudioTrackCallback(int event, void* user, void *info) {
         return;
     }
     int bytes = 0;
-
+    pthread_mutex_lock(&device_change_lock);
 // code for raw data start
     audio_format_t aformat = AUDIO_FORMAT_INVALID;
     int user_raw_enable = amsysfs_get_sysfs_int("/sys/class/audiodsp/digital_raw");
@@ -157,7 +158,7 @@ static void AudioTrackCallback(int event, void* user, void *info) {
             memset(buffer->i16, 0, buffer->size);
         }
     }
-
+    pthread_mutex_unlock(&device_change_lock);
     I2S_state += 1;
     return;
 }
@@ -171,10 +172,9 @@ static int RawAudioTrackRelease(void) {
     }
     if (gmpAudioTracker_raw != NULL ) {
         gmpAudioTracker_raw.clear();
-        gmpAudioTracker_raw = NULL;
         ALOGI("RawAudioTrackRelease done\n");
     }
-
+    gmpAudioTracker_raw = NULL;
     // raw end
 #if 0
     if (last_raw_flag == 2) {
@@ -194,9 +194,8 @@ static int AudioTrackRelease(void) {
 
     if (gmpAudioTracker != NULL ) {
         gmpAudioTracker.clear();
-        gmpAudioTracker = NULL;
     }
-
+    RawAudioTrackRelease();
     return 0;
 }
 static int RawAudioTrackInit(audio_format_t aformat,int sr)
@@ -205,26 +204,23 @@ static int RawAudioTrackInit(audio_format_t aformat,int sr)
     int user_raw_enable = amsysfs_get_sysfs_int("/sys/class/audiodsp/digital_raw");
     int ddp_passth = (user_raw_enable == 2)&&(spdif_audio_type == EAC3);
     int ret;
-
     ALOGD("%s, entering...,aformat %x,sr %d\n", __FUNCTION__,aformat,sr);
     //raw here
     if (gmpAudioTracker_raw != NULL) {
-         glpTracker_raw = gmpAudioTracker_raw.get();
+         gmpAudioTracker_raw = gmpAudioTracker_raw.get();
     } else {
         gmpAudioTracker_raw = new AudioTrack();
         if (gmpAudioTracker_raw == NULL) {
             ALOGE("%s, new gmpAudioTracker_raw failed.\n", __FUNCTION__);
             return -1;
         }
-        glpTracker_raw = gmpAudioTracker_raw.get();
+        gmpAudioTracker_raw = gmpAudioTracker_raw.get();
     }
-
     Status = glpTracker_raw->set(AUDIO_STREAM_MUSIC, sr, aformat,
-            AUDIO_CHANNEL_OUT_STEREO, 0,
-            (audio_output_flags_t)(AUDIO_OUTPUT_FLAG_DIRECT
-            | AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO),
-            RawAudioTrackCallback, NULL,
-            0, 0, false, (audio_session_t)0);
+            AUDIO_CHANNEL_OUT_STEREO, 0, (audio_output_flags_t)(AUDIO_OUTPUT_FLAG_DIRECT
+            | AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO)
+            ,
+            RawAudioTrackCallback/*NULL*/, NULL, 0, 0, false, (audio_session_t)0);
     if (Status != NO_ERROR) {
         ALOGE("%s, AudioTrack raw set failed.\n", __FUNCTION__);
         if (gmpAudioTracker_raw != NULL ) {
@@ -262,7 +258,7 @@ static int AudioTrackInit(void) {
     I2S_state = 0;
 
     if (gmpAudioTracker != NULL) {
-        glpTracker = gmpAudioTracker.get();
+         glpTracker = gmpAudioTracker.get();
     } else {
         gmpAudioTracker = new AudioTrack();
         if (gmpAudioTracker == NULL) {

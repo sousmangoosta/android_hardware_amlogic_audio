@@ -124,9 +124,6 @@ Dtshd_Media_Source::Dtshd_Media_Source(void) {
     mCurrentTimeUs=0;
     bytes_readed_sum_pre=0;
     bytes_readed_sum=0;
-
-    mMeta->setInt32(kKeyChannelCount, 2);
-    mMeta->setInt32(kKeySampleRate, 48000);
 }
 
 Dtshd_Media_Source::~Dtshd_Media_Source() {
@@ -333,10 +330,6 @@ status_t Aml_OMX_DtsCodec::read(unsigned char *buf, unsigned *size, int *exit) {
     status_t status;
     m_OMXMediaSource->Set_Stop_ReadBuf_Flag(*exit);
 
-    if (m_codec == NULL) {
-        return -1;
-    }
-
     if (*exit) {
         ALOGI("NOTE:exit flag enabled! [%s %d] \n", __FUNCTION__, __LINE__);
         *size = 0;
@@ -371,13 +364,7 @@ status_t Aml_OMX_DtsCodec::read(unsigned char *buf, unsigned *size, int *exit) {
 
 status_t Aml_OMX_DtsCodec::start() {
     ALOGI("[Aml_OMX_DtsCodec::%s %d] enter!\n", __FUNCTION__, __LINE__);
-    status_t status;
-    if (m_codec != NULL)
-        status = m_codec->start();
-    else
-        ALOGE("m_codec==NULL, m_codec->pause() start! [%s %d] \n",
-                __FUNCTION__, __LINE__);
-
+    status_t status = m_codec->start();
     if (status != OK) {
         ALOGE("Err:OMX client can't start OMX decoder! status=%d (0x%08x)\n",
                 (int) status, (int) status);
