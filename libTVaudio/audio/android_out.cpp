@@ -309,7 +309,3 @@ int release_android_audiotrack(void) {
     return AudioTrackRelease();
 }
 
-int release_raw_audio_track(void) {
-    amsysfs_set_sysfs_int("/sys/class/audiodsp/digital_codec", 0);
-    return RawAudioTrackRelease();
-}
