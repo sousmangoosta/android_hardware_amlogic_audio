@@ -974,10 +974,6 @@ static int release_audiotrack(struct aml_stream_out *out) {
     if (ret < 0) {
         ALOGE("%s, Delete audio track is fail!\n", __FUNCTION__);
     }
-    ret = release_raw_audio_track();
-    if (ret < 0) {
-        ALOGE("%s, Delete raw audio track is fail!\n", __FUNCTION__);
-    }
     set_amaudio2_enable(0);
     pthread_mutex_unlock(&out->lock);
     return 0;
@@ -1340,10 +1336,6 @@ static int aml_device_close(struct aml_dev *device) {
         free(in->delay_buf.start_add);
     }
 
-    omx_codec_close();
-    omx_codec_dts_close();
-    omx_started = 0;
-
     if (out->output_device == CC_OUT_USE_ALSA) {
         alsa_out_close(out);
     } else if (out->output_device == CC_OUT_USE_AMAUDIO) {
@@ -1353,6 +1345,9 @@ static int aml_device_close(struct aml_dev *device) {
         release_audiotrack(out);
     }
 
+    omx_codec_close();
+    omx_codec_dts_close();
+    omx_started = 0;
     tmp_buffer_release (&DDP_out_buffer);
     tmp_buffer_release (&DD_out_buffer);
     tmp_buffer_release (&android_out_buffer);
@@ -1750,10 +1745,6 @@ static void* aml_audio_threadloop(void *data __unused) {
         ALOGD("%s, set aml_Audio_ThreadExecFlag as 0.\n", __FUNCTION__);
     }
 
-    if (gpAmlDevice != NULL) {
-        aml_device_close(gpAmlDevice);
-    }
-
     ALOGD("%s, exiting...\n", __FUNCTION__);
     return ((void *) 0);
 }
@@ -1886,6 +1877,7 @@ int aml_audio_close(void) {
         exit_pthread_for_android_check(gpAmlDevice->android_check_ThreadID);
         gpAmlDevice->android_check_ThreadID = 0;
 
+        aml_device_close(gpAmlDevice);
         clrDevice(gpAmlDevice);
         gpAmlDevice = NULL;
 

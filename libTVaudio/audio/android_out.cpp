@@ -206,16 +206,13 @@ static int RawAudioTrackInit(audio_format_t aformat,int sr)
     int ret;
     ALOGD("%s, entering...,aformat %x,sr %d\n", __FUNCTION__,aformat,sr);
     //raw here
-    if (gmpAudioTracker_raw != NULL) {
-         gmpAudioTracker_raw = gmpAudioTracker_raw.get();
-    } else {
-        gmpAudioTracker_raw = new AudioTrack();
-        if (gmpAudioTracker_raw == NULL) {
-            ALOGE("%s, new gmpAudioTracker_raw failed.\n", __FUNCTION__);
-            return -1;
-        }
-        gmpAudioTracker_raw = gmpAudioTracker_raw.get();
+    gmpAudioTracker_raw = new AudioTrack();
+    if (gmpAudioTracker_raw == NULL) {
+        ALOGE("%s, new gmpAudioTracker_raw failed.\n", __FUNCTION__);
+        return -1;
     }
+    glpTracker_raw = gmpAudioTracker_raw.get();
+
     Status = glpTracker_raw->set(AUDIO_STREAM_MUSIC, sr, aformat,
             AUDIO_CHANNEL_OUT_STEREO, 0, (audio_output_flags_t)(AUDIO_OUTPUT_FLAG_DIRECT
             | AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO)
@@ -257,16 +254,13 @@ static int AudioTrackInit(void) {
 
     I2S_state = 0;
 
-    if (gmpAudioTracker != NULL) {
-         glpTracker = gmpAudioTracker.get();
-    } else {
-        gmpAudioTracker = new AudioTrack();
-        if (gmpAudioTracker == NULL) {
-            ALOGE("%s, new AudioTrack failed.\n", __FUNCTION__);
-            return -1;
-        }
-        glpTracker = gmpAudioTracker.get();
+    gmpAudioTracker = new AudioTrack();
+    if (gmpAudioTracker == NULL) {
+        ALOGE("%s, new AudioTrack failed.\n", __FUNCTION__);
+        return -1;
     }
+    glpTracker = gmpAudioTracker.get();
+
 
     Status = glpTracker->set(AUDIO_STREAM_MUSIC, 48000, AUDIO_FORMAT_PCM_16_BIT,
             AUDIO_CHANNEL_OUT_STEREO, 0, AUDIO_OUTPUT_FLAG_NONE,
