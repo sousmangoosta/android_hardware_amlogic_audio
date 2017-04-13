@@ -19,6 +19,7 @@
 #include <cutils/log.h>
 #include <cutils/properties.h>
 #include <pthread.h>
+#include <stdlib.h>
 
 #include "LVCS.h"
 #include "InstAlloc.h"

@@ -52,6 +52,7 @@
 #include "audio_hw_utils.h"
 #include "audio_hw_profile.h"
 #include "spdifenc_wrap.h"
+#include "audio_virtual_effect.h"
 
 /* ALSA cards for AML */
 #define CARD_AMLOGIC_BOARD 0
