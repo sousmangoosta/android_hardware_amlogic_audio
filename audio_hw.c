@@ -39,6 +39,11 @@
 #include <linux/ioctl.h>
 #include <hardware/hardware.h>
 #include <system/audio.h>
+
+#if ANDROID_PLATFORM_SDK_VERSION >= 25 //8.0
+#include <system/audio-base.h>
+#endif
+
 #include <hardware/audio.h>
 #include <sound/asound.h>
 #include <tinyalsa/asoundlib.h>
