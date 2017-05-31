@@ -3,7 +3,9 @@ LOCAL_PATH:= $(call my-dir)
 include $(CLEAR_VARS)
 
 LOCAL_MODULE := aml_audio_test
-
+ifeq ($(shell test $(PLATFORM_SDK_VERSION) -ge 26 && echo OK),OK)
+	LOCAL_PROPRIETARY_MODULE := true
+endif
 LOCAL_SHARED_LIBRARIES := libcutils libutils libtinyalsa libdl \
     libmedia libbinder libusbhost libstagefright
 

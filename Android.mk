@@ -25,6 +25,9 @@ ifeq ($(strip $(BOARD_ALSA_AUDIO)),tiny)
 	include $(CLEAR_VARS)
 
 	LOCAL_MODULE := audio.primary.amlogic
+	ifeq ($(shell test $(PLATFORM_SDK_VERSION) -ge 26 && echo OK),OK)
+		LOCAL_PROPRIETARY_MODULE := true
+	endif
 	LOCAL_MODULE_RELATIVE_PATH := hw
 	LOCAL_SRC_FILES := \
 		audio_hw.c \
@@ -58,18 +61,21 @@ ifeq ($(strip $(BOARD_ALSA_AUDIO)),tiny)
 #build for USB audio
 	ifeq ($(strip $(BOARD_USE_USB_AUDIO)),true)
 		include $(CLEAR_VARS)
-		
+
 		LOCAL_MODULE := audio.usb.amlogic
+		ifeq ($(shell test $(PLATFORM_SDK_VERSION) -ge 26 && echo OK),OK)
+			LOCAL_PROPRIETARY_MODULE := true
+		endif
 		LOCAL_MODULE_RELATIVE_PATH := hw
 		LOCAL_SRC_FILES := \
 			usb_audio_hw.c \
 			audio_resampler.c
 		LOCAL_C_INCLUDES += \
 			external/tinyalsa/include \
-			system/media/audio_utils/include 
+			system/media/audio_utils/include
 		LOCAL_SHARED_LIBRARIES := liblog libcutils libtinyalsa libaudioutils libutils
 		LOCAL_MODULE_TAGS := optional
-		
+
 		include $(BUILD_SHARED_LIBRARY)
 	endif # BOARD_USE_USB_AUDIO
 
@@ -78,14 +84,17 @@ ifeq ($(strip $(BOARD_ALSA_AUDIO)),tiny)
 		include $(CLEAR_VARS)
 
 		LOCAL_MODULE := audio.hdmi.amlogic
+		ifeq ($(shell test $(PLATFORM_SDK_VERSION) -ge 26 && echo OK),OK)
+			LOCAL_PROPRIETARY_MODULE := true
+		endif
 		LOCAL_MODULE_RELATIVE_PATH := hw
 		LOCAL_SRC_FILES := \
 			hdmi_audio_hw.c
 		LOCAL_C_INCLUDES += \
 			external/tinyalsa/include \
 			system/media/audio_effects/include \
-			system/media/audio_utils/include 
-			
+			system/media/audio_utils/include
+
 		LOCAL_SHARED_LIBRARIES := liblog libcutils libtinyalsa libaudioutils libutils
 #ifdef DOLBY_UDC_PASSTHROUGH_HDMI_PACK
 		LOCAL_SRC_FILES += spdifenc_wrap.cpp
@@ -134,7 +143,9 @@ LOCAL_C_INCLUDES := \
 
 LOCAL_MODULE := libaudiopolicymanager
 LOCAL_MODULE_TAGS := optional
-
+ifeq ($(shell test $(PLATFORM_SDK_VERSION) -ge 26 && echo OK),OK)
+	LOCAL_PROPRIETARY_MODULE := true
+endif
 include $(BUILD_SHARED_LIBRARY)
 endif # USE_CUSTOM_AUDIO_POLICY
 
