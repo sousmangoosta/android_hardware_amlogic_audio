@@ -27,4 +27,6 @@ int get_codec_type(int format);
 int getprop_bool (const char *path);
 unsigned char codec_type_is_raw_data(int type);
 int mystrstr(char *mystr,char *substr);
+void *convert_audio_sample_for_output(int input_frames,int input_format,int input_ch,void *input_buf,int *out_size/*,float lvol*/);
+
 #endif
