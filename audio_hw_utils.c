@@ -24,6 +24,7 @@
 
 #include "audio_hwsync.h"
 #include "audio_hw.h"
+#include <audio_utils/primitives.h>
 
 #ifdef LOG_NDEBUG_FUNCTION
 #define LOGFUNC(...) ((void)0)
@@ -162,5 +163,143 @@ int getprop_bool (const char *path)
 	return 1;
 	}
   return 0;
+}
+
+/*
+convert audio formats to supported audio format
+8 ch goes to 32 bit
+2 ch can be 16 bit or 32 bit
+@return input buffer used by alsa drivers to do the data write
+*/
+void *convert_audio_sample_for_output(int input_frames, int input_format, int input_ch, void *input_buf, int *out_size)
+{
+    float lvol = 1.0;
+    int *out_buf = NULL;
+    short *p16 = (short*)input_buf;
+    int *p32 = (int*)input_buf;
+    int max_ch =  input_ch;
+    int i;
+    //ALOGV("intput frame %d,input ch %d,buf ptr %p,vol %f\n", input_frames, input_ch, input_buf, lvol);
+    ALOG_ASSERT(input_buf);
+    if (input_ch > 2)
+        max_ch = 8;
+    //our HW need round the frames to 8 channels
+    out_buf = malloc(sizeof(int) * max_ch * input_frames);
+    if (out_buf == NULL) {
+        ALOGE("malloc buffer failed\n");
+        return NULL;
+    }
+    switch (input_format) {
+    case AUDIO_FORMAT_PCM_16_BIT:
+        break;
+    case AUDIO_FORMAT_PCM_32_BIT:
+        break;
+    case AUDIO_FORMAT_PCM_8_24_BIT:
+        for (i = 0; i < input_frames * input_ch; i++) {
+            p32[i] = p32[i] << 8;
+        }
+        break;
+    case AUDIO_FORMAT_PCM_FLOAT:
+        memcpy_to_i16_from_float(out_buf, input_buf, input_frames * input_ch);
+        memcpy(input_buf, out_buf, sizeof(short)*input_frames * input_ch);
+        break;
+    }
+    //current all the data are in the input buffer
+    if (input_ch == 8) {
+        short *p16_temp;
+        int i, NumSamps;
+        int *p32_temp = out_buf;
+        float m_vol = lvol;
+        NumSamps = input_frames * input_ch;
+        //here to swap the channnl data here
+        //actual now:L,missing,R,RS,RRS,,LS,LRS,missing
+        //expect L,C,R,RS,RRS,LRS,LS,LFE (LFE comes from to center)
+        //actual  audio data layout  L,R,C,none/LFE,LRS,RRS,LS,RS
+        if (input_format == AUDIO_FORMAT_PCM_16_BIT) {
+            p16_temp = (short*)out_buf;
+            for (i = 0; i < NumSamps; i = i + 8) {
+                p16_temp[0 + i]/*L*/ = m_vol * p16[0 + i];
+                p16_temp[1 + i]/*R*/ = m_vol * p16[1 + i];
+                p16_temp[2 + i] /*LFE*/ = m_vol * p16[3 + i];
+                p16_temp[3 + i] /*C*/ = m_vol * p16[2 + i];
+                p16_temp[4 + i] /*LS*/ = m_vol * p16[6 + i];
+                p16_temp[5 + i] /*RS*/ = m_vol * p16[7 + i];
+                p16_temp[6 + i] /*LRS*/ = m_vol * p16[4 + i];
+                p16_temp[7 + i]/*RRS*/ = m_vol * p16[5 + i];
+            }
+            memcpy(p16, p16_temp, NumSamps * sizeof(short));
+            for (i = 0; i < NumSamps; i++) { //suppose 16bit/8ch PCM
+                p32_temp[i] = p16[i] << 16;
+            }
+        } else {
+            p32_temp = out_buf;
+            for (i = 0; i < NumSamps; i = i + 8) {
+                p32_temp[0 + i]/*L*/ = m_vol * p32[0 + i];
+                p32_temp[1 + i]/*R*/ = m_vol * p32[1 + i];
+                p32_temp[2 + i] /*LFE*/ = m_vol * p32[3 + i];
+                p32_temp[3 + i] /*C*/ = m_vol * p32[2 + i];
+                p32_temp[4 + i] /*LS*/ = m_vol * p32[6 + i];
+                p32_temp[5 + i] /*RS*/ = m_vol * p32[7 + i];
+                p32_temp[6 + i] /*LRS*/ = m_vol * p32[4 + i];
+                p32_temp[7 + i]/*RRS*/ = m_vol * p32[5 + i];
+            }
+
+        }
+        *out_size = NumSamps * sizeof(int);
+
+    } else if (input_ch == 6) {
+        int j, NumSamps, real_samples;
+        short *p16_temp;
+        int *p32_temp = out_buf;
+        float m_vol = lvol;
+        NumSamps = input_frames * input_ch;
+        real_samples = NumSamps;
+        NumSamps = real_samples * 8 / 6;
+        //ALOGI("6ch to 8 ch real %d, to %d\n",real_samples,NumSamps);
+        if (input_format == AUDIO_FORMAT_PCM_16_BIT) {
+            p16_temp = (short*)out_buf;
+            for (i = 0; i < real_samples; i = i + 6) {
+                p16_temp[0 + i]/*L*/ = m_vol * p16[0 + i];
+                p16_temp[1 + i]/*R*/ = m_vol * p16[1 + i];
+                p16_temp[2 + i] /*LFE*/ = m_vol * p16[3 + i];
+                p16_temp[3 + i] /*C*/ = m_vol * p16[2 + i];
+                p16_temp[4 + i] /*LS*/ = m_vol * p16[4 + i];
+                p16_temp[5 + i] /*RS*/ = m_vol * p16[5 + i];
+            }
+            memcpy(p16, p16_temp, real_samples * sizeof(short));
+            memset(p32_temp, 0, NumSamps * sizeof(int));
+            for (i = 0, j = 0; j < NumSamps; i = i + 6, j = j + 8) { //suppose 16bit/8ch PCM
+                p32_temp[j + 0] = p16[i] << 16;
+                p32_temp[j + 1] = p16[i + 1] << 16;
+                p32_temp[j + 2] = p16[i + 2] << 16;
+                p32_temp[j + 3] = p16[i + 3] << 16;
+                p32_temp[j + 4] = p16[i + 4] << 16;
+                p32_temp[j + 5] = p16[i + 5] << 16;
+            }
+        } else {
+            p32_temp = out_buf;
+            memset(p32_temp, 0, NumSamps * sizeof(int));
+            for (i = 0, j = 0; j < NumSamps; i = i + 6, j = j + 8) { //suppose 16bit/8ch PCM
+                p32_temp[j + 0] = m_vol * p32[i + 0];
+                p32_temp[j + 1] = m_vol * p32[i + 1] ;
+                p32_temp[j + 2] = m_vol * p32[i + 2] ;
+                p32_temp[j + 3] = m_vol * p32[i + 3] ;
+                p32_temp[j + 4] = m_vol * p32[i + 4] ;
+                p32_temp[j + 5] = m_vol * p32[i + 5] ;
+            }
+        }
+        *out_size = NumSamps * sizeof(int);
+    } else {
+        //2ch with 24 bit/32/float audio
+        int *p32_temp = out_buf;
+        short *p16_temp = (short*)out_buf;
+        for (i = 0; i < input_frames; i++) {
+            p16_temp[2 * i + 0] =  lvol * p16[2 * i + 0];
+            p16_temp[2 * i + 1] =  lvol * p16[2 * i + 1];
+        }
+        *out_size = sizeof(short) * input_frames * input_ch;
+    }
+    return out_buf;
+
 }
 
