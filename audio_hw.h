@@ -97,7 +97,7 @@ struct aml_audio_device {
     struct pcm *pcm;
     bool pcm_paused;
     unsigned hdmi_arc_ad[HDMI_ARC_MAX_FORMAT];
-    bool device_busy;
+    bool hi_pcm_mode;
 };
 
 struct aml_stream_out {

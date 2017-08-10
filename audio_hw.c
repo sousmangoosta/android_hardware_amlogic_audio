@@ -357,7 +357,7 @@ static int start_output_stream(struct aml_stream_out *out)
     //TODO we need diff the code with AUDIO_DEVICE_OUT_ALL_SCO.
     //as it share the same hal but with the different card id.
     //TODO need reopen the tinyalsa card when sr/ch changed,
-    if (adev->pcm == NULL &&  !adev->device_busy) {
+    if (adev->pcm == NULL) {
         out->pcm = pcm_open(card, port, PCM_OUT /*| PCM_MMAP | PCM_NOIRQ*/, &(out->config));
         if (!pcm_is_ready(out->pcm)) {
             ALOGE("cannot open pcm_out driver: %s", pcm_get_error(out->pcm));
@@ -502,13 +502,7 @@ static int start_output_stream_direct(struct aml_stream_out *out)
           out->config.period_size, out->config.rate);
 
     if (out->pcm == NULL) {
-        if (adev->pcm && !adev->device_busy) {
-            ALOGI("close pcm %p\n", adev->pcm);
-            pcm_close(adev->pcm);
-            //adev->pcm = NULL;
-        }
         out->pcm = pcm_open(card, port, PCM_OUT, &out->config);
-        adev->device_busy = true;
         if (!pcm_is_ready(out->pcm)) {
             ALOGE("cannot open pcm_out driver: %s", pcm_get_error(out->pcm));
             pcm_close(out->pcm);
@@ -767,7 +761,6 @@ static int do_output_standby(struct aml_stream_out *out)
 {
     struct aml_audio_device *adev = out->dev;
     int i = 0;
-
     LOGFUNC("%s(%p)", __FUNCTION__, out);
 
     if (!out->standby) {
@@ -821,7 +814,7 @@ static int do_output_standby(struct aml_stream_out *out)
             ALOGE("error, not found stream in dev stream list\n");
         }
         /* no active output here,we can close the pcm to release the sound card now*/
-        if (adev->active_output_count == 0 && !adev->device_busy) {
+        if (adev->active_output_count == 0) {
             if (adev->pcm) {
                 ALOGI("close pcm %p\n", adev->pcm);
                 pcm_close(adev->pcm);
@@ -886,7 +879,8 @@ static int out_standby_direct(struct audio_stream *stream)
             free(out->buffer);
             out->buffer = NULL;
         }
-
+        if (adev->hi_pcm_mode)
+            adev->hi_pcm_mode = false;
         out->standby = 1;
         pcm_close(out->pcm);
         out->pcm = NULL;
@@ -897,7 +891,6 @@ static int out_standby_direct(struct audio_stream *stream)
     if (out->multich == 6) {
         sysfs_set_sysfs_str("/sys/class/amhdmitx/amhdmitx0/aud_output_chs", "0:0");
     }
-    adev->device_busy = false;
     pthread_mutex_unlock(&out->lock);
     pthread_mutex_unlock(&out->dev->lock);
     return status;
@@ -1389,6 +1382,15 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
      */
     pthread_mutex_lock(&adev->lock);
     pthread_mutex_lock(&out->lock);
+    //if hi pcm mode ,we need releae i2s device so direct stream can get it.
+    if (adev->hi_pcm_mode ) {
+        if (!out->standby)
+            do_output_standby(out);
+         ret = -1 ;
+         pthread_mutex_unlock(&adev->lock);
+         goto exit;
+    }
+
     //here to check whether hwsync out stream and other stream are enabled at the same time.
     //if that we need do the hal mixer of the two out stream.
     if (out->hw_sync_mode == 1) {
@@ -1557,7 +1559,8 @@ if (!(adev->out_device & AUDIO_DEVICE_OUT_ALL_SCO)) {
     //samesource_flag = get_sysfs_int("/sys/class/audiodsp/audio_samesource");
     if (codec_type != out->last_codec_type/*samesource_flag == 0*/ && codec_type == 0) {
         ALOGI("to enable same source,need reset alsa,type %d,same source flag %d \n", codec_type, samesource_flag);
-        pcm_stop(out->pcm);
+        if (out->pcm)
+           pcm_stop(out->pcm);
     }
     out->last_codec_type = codec_type;
 }
@@ -1906,7 +1909,9 @@ if (!(adev->out_device & AUDIO_DEVICE_OUT_ALL_SCO)) {
                 mixer->rp = mixer->wp = 0;
                 pthread_mutex_unlock(&mixer->lock);
             }
+
             ret = pcm_write(out->pcm, out_buffer, out_frames * frame_size);
+
             pthread_mutex_unlock(&adev->pcm_write_lock);
             out->frame_write_sum += out_frames;
         }
@@ -1978,7 +1983,6 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
         }
     }
 #endif
-
     if (out->standby) {
         ret = start_output_stream(out);
         if (ret != 0) {
@@ -2039,9 +2043,6 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
         }
     }
 #endif
-    if (adev->device_busy)
-           goto exit;
-
     struct aml_hal_mixer *mixer = &adev->hal_mixer;
     pthread_mutex_lock(&adev->pcm_write_lock);
     if (aml_hal_mixer_get_content(mixer) > 0) {
@@ -3265,6 +3266,10 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
             out->hal_channel_mask = AUDIO_CHANNEL_OUT_STEREO;
             //config->channel_mask = AUDIO_CHANNEL_OUT_STEREO;
         }
+        if (digital_codec == AUDIO_FORMAT_PCM && (out->config.rate > 48000 || out->config.channels >= 6)) {
+            ALOGI("open hi pcm mode !\n");
+            ladev->hi_pcm_mode = true;
+        }
     } else {
         // TODO: add other cases here
         ALOGE("DO not support yet!!");
@@ -3714,7 +3719,7 @@ static int adev_open(const hw_module_t* module, const char* name,
     adev->mode = AUDIO_MODE_NORMAL;
     adev->out_device = AUDIO_DEVICE_OUT_SPEAKER;
     adev->in_device = AUDIO_DEVICE_IN_BUILTIN_MIC & ~AUDIO_DEVICE_BIT_IN;
-    adev->device_busy = false;
+    adev->hi_pcm_mode = false;
     select_devices(adev);
 
     *device = &adev->hw_device.common;
