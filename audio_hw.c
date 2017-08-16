@@ -469,6 +469,7 @@ static int start_output_stream_direct(struct aml_stream_out *out)
     if (getprop_bool("media.libplayer.wfd")) {
         out->config.period_size = PERIOD_SIZE;
     }
+
     switch (out->hal_format) {
     case AUDIO_FORMAT_E_AC3:
         out->config.period_size = PERIOD_SIZE * 2;
@@ -699,6 +700,8 @@ static size_t out_get_buffer_size(const struct audio_stream *stream)
         } else {
             size = PERIOD_SIZE;
         }
+        if (out->config.format == AUDIO_FORMAT_IEC61937)
+             size = PERIOD_SIZE;
         break;
     case AUDIO_FORMAT_E_AC3:
         if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
@@ -706,6 +709,8 @@ static size_t out_get_buffer_size(const struct audio_stream *stream)
         } else {
             size = PLAYBACK_PERIOD_COUNT*PERIOD_SIZE;   //PERIOD_SIZE;
         }
+        if (out->config.format == AUDIO_FORMAT_IEC61937)
+             size =  PLAYBACK_PERIOD_COUNT * PERIOD_SIZE;
         break;
     case AUDIO_FORMAT_DTS_HD:
     case AUDIO_FORMAT_TRUEHD:
@@ -714,6 +719,8 @@ static size_t out_get_buffer_size(const struct audio_stream *stream)
         } else {
             size = 4 * PLAYBACK_PERIOD_COUNT * PERIOD_SIZE;
         }
+        if (out->config.format == AUDIO_FORMAT_IEC61937)
+            size = 4 * PLAYBACK_PERIOD_COUNT * PERIOD_SIZE;
         break;
     case AUDIO_FORMAT_PCM:
     default:
@@ -749,7 +756,7 @@ static audio_format_t out_get_format_direct(const struct audio_stream *stream)
 {
     const struct aml_stream_out *out = (const struct aml_stream_out *)stream;
 
-    return out->hal_format;
+      return  out->config.format;
 }
 
 static int out_set_format(struct audio_stream *stream __unused, audio_format_t format __unused)
@@ -1160,11 +1167,16 @@ static char *out_get_parameters(const struct audio_stream *stream, const char *k
     struct aml_stream_out *out = (struct aml_stream_out *) stream;
     struct aml_audio_device *adev = out->dev;
     ALOGI("out_get_parameters %s,out %p\n", keys, out);
+    struct str_parms *parms;
+    audio_format_t format;
+    int ret = 0;
+    parms = str_parms_create_str(keys);
+    ret = str_parms_get_int(parms, AUDIO_PARAMETER_STREAM_FORMAT ,&format);
     if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES)) {
         if (out->out_device & AUDIO_DEVICE_OUT_HDMI_ARC) {
             cap = (char *)get_hdmi_arc_cap(adev->hdmi_arc_ad, HDMI_ARC_MAX_FORMAT, AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES);
         } else {
-            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES);
+            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES,format);
         }
         if (cap) {
             para = strdup(cap);
@@ -1178,7 +1190,7 @@ static char *out_get_parameters(const struct audio_stream *stream, const char *k
         if (out->out_device & AUDIO_DEVICE_OUT_HDMI_ARC) {
             cap = (char *)get_hdmi_arc_cap(adev->hdmi_arc_ad, HDMI_ARC_MAX_FORMAT, AUDIO_PARAMETER_STREAM_SUP_CHANNELS);
         } else {
-            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_CHANNELS);
+            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_CHANNELS,format);
         }
         if (cap) {
             para = strdup(cap);
@@ -1192,7 +1204,7 @@ static char *out_get_parameters(const struct audio_stream *stream, const char *k
         if (out->out_device & AUDIO_DEVICE_OUT_HDMI_ARC) {
             cap = (char *)get_hdmi_arc_cap(adev->hdmi_arc_ad, HDMI_ARC_MAX_FORMAT, AUDIO_PARAMETER_STREAM_SUP_FORMATS);
         } else {
-            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_FORMATS);
+            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_FORMATS,format);
         }
         if (cap) {
             para = strdup(cap);
@@ -2442,12 +2454,12 @@ static int out_get_render_position(const struct audio_stream_out *stream,
     uint64_t  dsp_frame_int64 = 0;
     *dsp_frames = out->last_frames_postion;
     if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
-        dsp_frame_int64 = out->last_frames_postion / out->raw_61937_frame_size;
+        dsp_frame_int64 = out->last_frames_postion ;
         *dsp_frames = (uint32_t)(dsp_frame_int64 & 0xffffffff);
         if (out->last_dsp_frame > *dsp_frames) {
             ALOGI("maybe uint32_t wraparound,print something,last %u,now %u", out->last_dsp_frame, *dsp_frames);
             ALOGI("wraparound,out_get_render_position return %u,playback time %"PRIu64" ms,sr %d\n", *dsp_frames,
-                  out->last_frames_postion * 1000 / out->raw_61937_frame_size / out->config.rate, out->config.rate);
+                  out->last_frames_postion * 1000 / out->config.rate, out->config.rate);
 
         }
     }
@@ -2483,9 +2495,6 @@ static int out_get_presentation_position(const struct audio_stream_out *stream, 
     *frames = out->last_frames_postion;
     *timestamp = out->timestamp;
 
-    if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
-        *frames /= out->raw_61937_frame_size;
-    }
     ALOGV("out_get_presentation_position out %p %"PRIu64", sec = %ld, nanosec = %ld\n", out, *frames, timestamp->tv_sec, timestamp->tv_nsec);
 
     return 0;
@@ -3244,14 +3253,30 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
         }
         /* set default pcm config for direct. */
         out->config = pcm_config_out_direct;
-        out->hal_channel_mask = config->channel_mask;
+        out->hal_channel_mask  = config->channel_mask;
+        //out->config.channels = popcount(config->channel_mask);
         if (config->sample_rate == 0) {
             config->sample_rate = 48000;
         }
+
         out->config.rate = out->hal_rate = config->sample_rate;
-        out->hal_format = config->format;
+        out->hal_format = out->config.format= config->format;
+        if (config->format == AUDIO_FORMAT_IEC61937) {
+            if (audio_channel_count_from_out_mask(config->channel_mask) == 2 &&
+               (config->sample_rate == 192000 ||config->sample_rate == 176400)) {
+                out->hal_format = AUDIO_FORMAT_E_AC3;
+                out->config.rate = config->sample_rate / 4;
+             } else if (audio_channel_count_from_out_mask(config->channel_mask) >= 6 &&
+                        config->sample_rate == 192000) {
+                 out->hal_format = AUDIO_FORMAT_DTS_HD;
+             } else if (audio_channel_count_from_out_mask(config->channel_mask) == 2 &&
+                       config->sample_rate >= 32000 && config->sample_rate <= 48000) {
+                 out->hal_format =  AUDIO_FORMAT_AC3;
+             }
+             ALOGI("convert format IEC61937 to 0x%x\n",out->config.format);
+        }
         out->raw_61937_frame_size = 1;
-        digital_codec = get_codec_type(config->format);
+        digital_codec = get_codec_type(out->hal_format);
         if (digital_codec == TYPE_EAC3) {
             out->raw_61937_frame_size = 4;
             out->config.period_size = pcm_config_out_direct.period_size * 2;
@@ -3272,10 +3297,9 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
             ALOGI("for raw audio output,force alsa stereo output\n");
             out->config.channels = 2;
             out->multich = 2;
-            out->hal_channel_mask = AUDIO_CHANNEL_OUT_STEREO;
             //config->channel_mask = AUDIO_CHANNEL_OUT_STEREO;
         }
-        if (digital_codec == AUDIO_FORMAT_PCM && (out->config.rate > 48000 || out->config.channels >= 6)) {
+        if (digital_codec == TYPE_PCM && (out->config.rate > 48000 || out->config.channels >= 6)) {
             ALOGI("open hi pcm mode !\n");
             ladev->hi_pcm_mode = true;
         }

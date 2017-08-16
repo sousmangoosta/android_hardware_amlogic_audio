@@ -149,7 +149,7 @@ Dobly_Digital+, 8 ch, 44.1/48 kHz, 16 bit
 DTS-HD, 8 ch, 44.1/48/88.2/96/176.4/192 kHz, 16 bit
 MAT, 8 ch, 32/44.1/48/88.2/96/176.4/192 kHz, 16 bit
 */
-char*  get_hdmi_sink_cap(const char *keys)
+char*  get_hdmi_sink_cap(const char *keys,audio_format_t format)
 {
     int i = 0;
     char * infobuf = NULL;
@@ -212,7 +212,8 @@ char*  get_hdmi_sink_cap(const char *keys)
             if (mystrstr(infobuf, "176.4")) {
                 size += sprintf(aud_cap + size, "|%s", "176400");
             }
-            if (mystrstr(infobuf, "192")) {
+            if (mystrstr(infobuf, "192") || (mystrstr(infobuf, "Dobly_Digital+") &&
+                format == AUDIO_FORMAT_IEC61937)) {
                 size += sprintf(aud_cap + size, "|%s", "192000");
             }
         }
