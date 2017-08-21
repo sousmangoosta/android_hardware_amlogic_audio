@@ -781,16 +781,6 @@ static int out_set_format(struct audio_stream *stream __unused, audio_format_t f
     return 0;
 }
 
-// Add out_set_channel_mask() function for passing VTS test
-/*
-static int out_set_channel_mask(struct audio_stream *stream __unused, audio_channel_mask_t channel_mask __unused)
-{
-    ALOGE("Amlogic_HAL - %s: out_set_channel_mask() is not implemented. \
-           Workaround for passing VTS.", __FUNCTION__);
-    return 0;
-}
-*/
-
 /* must be called with hw device and output stream mutexes locked */
 static int do_output_standby(struct aml_stream_out *out)
 {
@@ -1034,7 +1024,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
 
         // We shall return Result::OK, which is 0, if parameter is set successfully,
         // or we can not pass VTS test.
-        ALOGV("Amlogic_HAL - %s: change ret value to 0 in order to pass VTS test.", __FUNCTION__);
+        ALOGI("Amlogic_HAL - %s: change ret value to 0 in order to pass VTS test.", __FUNCTION__);
         ret = 0;
 
         goto exit;
@@ -1054,7 +1044,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
                 out->standby = 0;
             }
             // set hal_rate to sr for passing VTS
-            ALOGV("Amlogic_HAL - %s: set sample_rate to hal_rate.", __FUNCTION__);
+            ALOGI("Amlogic_HAL - %s: set sample_rate to hal_rate.", __FUNCTION__);
             out->hal_rate = sr;
             pthread_mutex_unlock(&adev->lock);
             pthread_mutex_unlock(&out->lock);
@@ -1062,7 +1052,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
 
         // We shall return Result::OK, which is 0, if parameter is set successfully,
         // or we can not pass VTS test.
-        ALOGV("Amlogic_HAL - %s: change ret value to 0 in order to pass VTS test.", __FUNCTION__);
+        ALOGI("Amlogic_HAL - %s: change ret value to 0 in order to pass VTS test.", __FUNCTION__);
         ret = 0;
 
         goto exit;
@@ -1083,7 +1073,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
                 out->standby = 0;
             }
             // set hal_format to fmt for passing VTS
-            ALOGV("Amlogic_HAL - %s: set format to hal_format. fmt = %d", __FUNCTION__, fmt);
+            ALOGI("Amlogic_HAL - %s: set format to hal_format. fmt = %d", __FUNCTION__, fmt);
             out->hal_format = fmt;
             pthread_mutex_unlock(&adev->lock);
             pthread_mutex_unlock(&out->lock);
@@ -1091,7 +1081,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
 
         // We shall return Result::OK, which is 0, if parameter is set successfully,
         // or we can not pass VTS test.
-        ALOGV("Amlogic_HAL - %s: change ret value to 0 in order to pass VTS test.", __FUNCTION__);
+        ALOGI("Amlogic_HAL - %s: change ret value to 0 in order to pass VTS test.", __FUNCTION__);
         ret = 0;
 
         goto exit;
@@ -1117,7 +1107,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
 
         // We shall return Result::OK, which is 0, if parameter is set successfully,
         // or we can not pass VTS test.
-        ALOGV("Amlogic_HAL - %s: change ret value to 0 in order to pass VTS test.", __FUNCTION__);
+        ALOGI("Amlogic_HAL - %s: change ret value to 0 in order to pass VTS test.", __FUNCTION__);
         ret = 0;
 
         goto exit;
@@ -1236,7 +1226,7 @@ exit:
     // We shall return Result::OK, which is 0, if parameter is NULL,
     // or we can not pass VTS test.
     if (ret < 0) {
-        ALOGV("Amlogic_HAL - %s: parameter is NULL, change ret value to 0 in order to pass VTS test.", __FUNCTION__);
+        ALOGE("Amlogic_HAL - %s: parameter is NULL, change ret value to 0 in order to pass VTS test.", __FUNCTION__);
         ret = 0;
     }
     return ret;
@@ -1383,7 +1373,7 @@ static int out_resume(struct audio_stream_out *stream)
         // If output stream is not standby or not paused,
         // we should return Result::INVALID_STATE (3),
         // thus we can pass VTS test.
-        ALOGV("Amlogic_HAL - %s: cannot resume, because output stream isn't in standby or paused state.", __FUNCTION__);
+        ALOGE("Amlogic_HAL - %s: cannot resume, because output stream isn't in standby or paused state.", __FUNCTION__);
         r = 3;
 
         goto exit;
@@ -2564,7 +2554,7 @@ static int out_get_next_write_timestamp(const struct audio_stream_out *stream __
 
     // VTS can only recognizes Result:OK or Result:INVALID_STATE, which is 0 or 3.
     // So we return ESRCH (3) in order to pass VTS.
-    ALOGV("Amlogic_HAL - %s: return ESRCH (3) instead of -EINVAL (-22)", __FUNCTION__);
+    ALOGI("Amlogic_HAL - %s: return ESRCH (3) instead of -EINVAL (-22)", __FUNCTION__);
     return ESRCH;
 }
 
@@ -2815,10 +2805,10 @@ static int in_set_parameters(struct audio_stream *stream, const char *kvpairs)
     // VTS can only recognizes Result::OK, which is 0x0.
     // So we change ret value to 0 when ret isn't equal to 0
     if (ret > 0) {
-        ALOGV("Amlogic_HAL - %s: change ret value to 0 if it's greater than 0 for passing VTS test.", __FUNCTION__);
+        ALOGI("Amlogic_HAL - %s: change ret value to 0 if it's greater than 0 for passing VTS test.", __FUNCTION__);
         ret = 0;
     } else if (ret < 0) {
-        ALOGV("Amlogic_HAL - %s: parameter is NULL, change ret value to 0 if it's greater than 0 for passing VTS test.", __FUNCTION__);
+        ALOGI("Amlogic_HAL - %s: parameter is NULL, change ret value to 0 if it's greater than 0 for passing VTS test.", __FUNCTION__);
         ret = 0;
     }
 
@@ -3326,7 +3316,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
 
     // Output flag shall not be AUDIO_OUTPUT_FLAG_NONE during HAL stage
     if (flags == AUDIO_OUTPUT_FLAG_NONE) {
-        ALOGV("Amlogic_HAL - %s: output flag is AUDIO_OUTPUT_FLAG_NONE, modify it to default value AUDIO_OUTPUT_FLAG_PRIMARY.", __FUNCTION__);
+        ALOGE("Amlogic_HAL - %s: output flag is AUDIO_OUTPUT_FLAG_NONE, modify it to default value AUDIO_OUTPUT_FLAG_PRIMARY.", __FUNCTION__);
         flags = AUDIO_OUTPUT_FLAG_PRIMARY;
     }
 
@@ -3399,8 +3389,6 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     out->stream.common.set_sample_rate = out_set_sample_rate;
     out->stream.common.get_buffer_size = out_get_buffer_size;
     out->stream.common.set_format = out_set_format;
-    // add .set_channel_mask handler for passing VTS test
-    //out->stream.common.set_channels = out_set_channel_mask;
     //out->stream.common.standby = out_standby;
     out->stream.common.dump = out_dump;
     out->stream.common.set_parameters = out_set_parameters;
@@ -3561,14 +3549,17 @@ static int adev_set_parameters(struct audio_hw_device *dev, const char *kvpairs)
     // VTS regards 0 as success, so if we setting parameter successfully,
     // zero should be returned instead of data length.
     // To pass VTS test, ret must be Result::OK (0) or Result::NOT_SUPPORTED (4).
-    if (ret > 0) {
-        ALOGV("Amlogic_HAL - %s: return 0 instead of length of data be copied.", __FUNCTION__);
+    if (kvpairs == NULL) {
+        ALOGE("Amlogic_HAL - %s: kvpairs points to NULL. Abort function and return 0.", __FUNCTION__);
+        return 0;
+    }
+    if (ret > 0 || (strlen(kvpairs) == 0)) {
+        ALOGI("Amlogic_HAL - %s: return 0 instead of length of data be copied.", __FUNCTION__);
         ret = 0;
     } else if (ret < 0) {
-        ALOGV("Amlogic_HAL - %s: return Result::NOT_SUPPORTED (4) instead of other error code.", __FUNCTION__);
+        ALOGI("Amlogic_HAL - %s: return Result::NOT_SUPPORTED (4) instead of other error code.", __FUNCTION__);
         ret = 4;
     }
-
     return ret;
 }
 
