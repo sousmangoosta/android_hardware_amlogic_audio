@@ -130,7 +130,9 @@ LOCAL_SHARED_LIBRARIES := \
 	libmedia \
 	libbinder \
 	libaudiopolicymanagerdefault \
-	libutils
+	libutils \
+        libaudioclient \
+        libmedia_helper
 
 LOCAL_C_INCLUDES := \
 	external/tinyalsa/include \
@@ -138,8 +140,8 @@ LOCAL_C_INCLUDES := \
 	$(TOPDIR)frameworks/av/services/audiopolicy/managerdefault \
 	$(TOPDIR)frameworks/av/services/audiopolicy/engine/interface \
 	$(TOPDIR)frameworks/av/services/audiopolicy/common/managerdefinitions/include \
-	$(TOPDIR)frameworks/av/services/audiopolicy/common/include
-
+	$(TOPDIR)frameworks/av/services/audiopolicy/common/include \
+        $(TOPDIR)frameworks/av/media/libaudioclient/include
 
 LOCAL_MODULE := libaudiopolicymanager
 LOCAL_MODULE_TAGS := optional
