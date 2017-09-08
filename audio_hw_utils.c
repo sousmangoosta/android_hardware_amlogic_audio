@@ -142,7 +142,7 @@ int get_codec_type(int format)
         return TYPE_DTS;
     case AUDIO_FORMAT_DTS_HD:
         return TYPE_DTS_HD_MA;
-    case AUDIO_FORMAT_TRUEHD:
+    case AUDIO_FORMAT_DOLBY_TRUEHD:
         return TYPE_TRUE_HD;
     case AUDIO_FORMAT_PCM:
         return TYPE_PCM;

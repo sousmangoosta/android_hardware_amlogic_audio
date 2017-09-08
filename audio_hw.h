@@ -33,6 +33,18 @@ static unsigned int DEFAULT_OUT_SAMPLING_RATE = 48000;
 /* sampling rate when using VX port for narrow band */
 #define VX_NB_SAMPLING_RATE 8000
 
+#define AUDIO_PARAMETER_STREAM_EQ "audioeffect_eq"
+#define AUDIO_PARAMETER_STREAM_SRS "audioeffect_srs_param"
+#define AUDIO_PARAMETER_STREAM_SRS_GAIN "audioeffect_srs_gain"
+#define AUDIO_PARAMETER_STREAM_SRS_SWITCH "audioeffect_srs_switch"
+
+/* Get a new HW synchronization source identifier.
+ * Return a valid source (positive integer) or AUDIO_HW_SYNC_INVALID if an error occurs
+ * or no HW sync is available. */
+#define AUDIO_PARAMETER_HW_AV_SYNC "hw_av_sync"
+
+#define AUDIO_PARAMETER_HW_AV_EAC3_SYNC "HwAvSyncEAC3Supported"
+
 enum {
     TYPE_PCM = 0,
     TYPE_AC3 = 2,

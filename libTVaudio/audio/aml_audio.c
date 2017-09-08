@@ -1331,7 +1331,7 @@ static int aml_device_init(struct aml_dev *device) {
         device->has_Virtualizer = 0;
     }
 
-    audio_IIR_init();
+    //audio_IIR_init();
     audio_effect_load_para(device);
     ALOGD("%s, exiting...\n", __FUNCTION__);
     return 0;
@@ -1373,8 +1373,8 @@ static int aml_device_close(struct aml_dev *device) {
         free(in->delay_buf.start_add);
     }
 
-    omx_codec_close();
-    omx_codec_dts_close();
+    //omx_codec_close();
+    //omx_codec_dts_close();
     omx_started = 0;
 
     if (out->output_device == CC_OUT_USE_ALSA) {
@@ -1525,17 +1525,19 @@ err_exit:
     set_output_deviceID(MODERAW);
     out->output_device = CC_OUT_USE_ANDROID;
     set_Hardware_resample(4);
-    if (audioin_type == AC3 || audioin_type == EAC3)
-        omx_codec_init();
-    if (audioin_type == DTS || audioin_type == DTSHD)
-        omx_codec_dts_init();
+    if (audioin_type == AC3 || audioin_type == EAC3) {
+        //omx_codec_init();
+    }
+    if (audioin_type == DTS || audioin_type == DTSHD) {
+        //omx_codec_dts_init();
+    }
     return 0;
 }
 
 static int set_rawdata_in_disable(struct aml_stream_out *out) {
 
-    omx_codec_close();
-    omx_codec_dts_close();
+    //omx_codec_close();
+    //omx_codec_dts_close();
 
     if ((gUSBCheckFlag & AUDIO_DEVICE_OUT_SPEAKER) != 0) {
         if (out->user_set_device == CC_OUT_USE_AMAUDIO) {
@@ -1584,7 +1586,8 @@ static int check_audio_type(struct aml_stream_out *out) {
     if (audioin_type == LPCM && omx_started == 1) {
         pcm_data_counter++;
     }
-    if (raw_data_counter >= 1 && omx_started == 0) {
+    //temp disable raw stream check as the dts/dolby decoder is not ready
+    if (0 && raw_data_counter >= 1 && omx_started == 0) {
         ALOGI("%s, audio type is changed to RAW data input!,type %d\n", __FUNCTION__,audioin_type);
         set_rawdata_in_enable(out);
         omx_started = 1;

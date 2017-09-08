@@ -7,7 +7,8 @@ ifeq ($(shell test $(PLATFORM_SDK_VERSION) -ge 26 && echo OK),OK)
 	LOCAL_PROPRIETARY_MODULE := true
 endif
 LOCAL_SHARED_LIBRARIES := libcutils libutils libtinyalsa libdl \
-    libmedia libbinder libstagefright libstagefright_foundation
+    libmedia libbinder libstagefright libstagefright_foundation  libaaudio  liblog libaudioclient \
+    libmedia_helper
 
 ifneq (0, $(shell expr $(PLATFORM_VERSION) \>= 5.0))
 LOCAL_SHARED_LIBRARIES += libsystemcontrolservice
@@ -36,11 +37,10 @@ LOCAL_SRC_FILES := \
     audio/audio_amaudio.cpp \
     audio/audio_usb_check.cpp \
     audio/amaudio_main.cpp \
-    audio/DDP_media_source.cpp \
     audio/aml_shelf.c \
-    audio/DTSHD_media_source.cpp \
     ../audio_virtual_effect.c
-
+    #audio/DDP_media_source.cpp \
+    #audio/DTSHD_media_source.cpp 
 LOCAL_STATIC_LIBRARIES += libmusicbundle
 
 LOCAL_CFLAGS := -DANDROID_PLATFORM_SDK_VERSION=$(PLATFORM_SDK_VERSION)  -DUSE_SYS_WRITE_SERVICE=1

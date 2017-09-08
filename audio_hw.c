@@ -482,7 +482,7 @@ static int start_output_stream_direct(struct aml_stream_out *out)
         //out->raw_61937_frame_size = 16;
         break;
     case AUDIO_FORMAT_DTS_HD:
-    case AUDIO_FORMAT_TRUEHD:
+    case AUDIO_FORMAT_DOLBY_TRUEHD:
         out->config.period_size = PERIOD_SIZE * 4 * 2;
         out->write_threshold = PLAYBACK_PERIOD_COUNT * PERIOD_SIZE * 4 * 2;
         out->config.start_threshold = PLAYBACK_PERIOD_COUNT * PERIOD_SIZE * 4 * 2;
@@ -717,7 +717,7 @@ static size_t out_get_buffer_size(const struct audio_stream *stream)
         }
         break;
     case AUDIO_FORMAT_DTS_HD:
-    case AUDIO_FORMAT_TRUEHD:
+    case AUDIO_FORMAT_DOLBY_TRUEHD:
         if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
             size = 16 * PERIOD_SIZE * PLAYBACK_PERIOD_COUNT;
         } else {

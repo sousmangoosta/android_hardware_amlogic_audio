@@ -3,6 +3,12 @@
 
 #include "audio/aml_audio.h"
 
+#define AUDIO_PARAMETER_STREAM_EQ "audioeffect_eq"
+#define AUDIO_PARAMETER_STREAM_SRS "audioeffect_srs_param"
+#define AUDIO_PARAMETER_STREAM_SRS_GAIN "audioeffect_srs_gain"
+#define AUDIO_PARAMETER_STREAM_SRS_SWITCH "audioeffect_srs_switch"
+
+
 int amSetAudioDelay(int delay_ms);
 int amGetAudioDelay(void);
 int amAudioOpen(unsigned int sr, int input_device, int output_device);

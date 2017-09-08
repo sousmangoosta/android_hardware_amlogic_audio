@@ -7,7 +7,8 @@ ifeq ($(shell test $(PLATFORM_SDK_VERSION) -ge 26 && echo OK),OK)
 	LOCAL_PROPRIETARY_MODULE := true
 endif
 LOCAL_SHARED_LIBRARIES := libcutils libutils libtinyalsa libdl \
-    libmedia libbinder libusbhost libstagefright
+    libmedia libbinder libusbhost libstagefright   libaaudio  liblog libaudioclient \
+    libmedia_helper
 
 LOCAL_C_INCLUDES := \
     external/tinyalsa/include \
@@ -22,8 +23,8 @@ LOCAL_SRC_FILES := \
     audio_amaudio.cpp \
     audio_usb_check.cpp \
     amaudio_main.cpp \
-    DDP_media_source.cpp \
-    DTSHD_media_source.cpp \
+#    DDP_media_source.cpp \
+#    DTSHD_media_source.cpp \
 LOCAL_CFLAGS := -DANDROID_PLATFORM_SDK_VERSION=$(PLATFORM_SDK_VERSION)
 
 LOCAL_MODULE_TAGS := optional

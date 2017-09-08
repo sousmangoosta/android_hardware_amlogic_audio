@@ -8,14 +8,13 @@
 #include <errno.h>
 #include <strings.h>
 #include <sys/ioctl.h>
-#include <cutils/log.h>
 #include <cutils/properties.h>
 #include <media/AudioTrack.h>
-
+#include <utils/Log.h>
 #include "audio_usb_check.h"
 #include "android_out.h"
 #include "aml_audio.h"
-#include "DDP_media_source.h"
+//#include "DDP_media_source.h"
 
 using namespace android;
 
