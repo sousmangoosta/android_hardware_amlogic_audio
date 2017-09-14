@@ -506,6 +506,7 @@ static int start_output_stream_direct(struct aml_stream_out *out)
         if (!pcm_is_ready(out->pcm)) {
             ALOGE("cannot open pcm_out driver: %s", pcm_get_error(out->pcm));
             pcm_close(out->pcm);
+            out->pcm = NULL;
             return -EINVAL;
         }
     } else {
@@ -2159,6 +2160,14 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
     */
     ALOGV("out_write_direct:out %p,position %zu, out_write size %"PRIu64,
             out, bytes, out->frame_write_sum);
+    /*when hi-pcm stopped  and switch to 2-ch , then switch to hi-pcm,hi-pcm-mode must be
+     set and wait 20ms for i2s device release*/
+   if (get_codec_type(out->hal_format) == TYPE_PCM && !adev->hi_pcm_mode
+        && (out->config.rate > 48000 || out->config.channels >= 6)
+        ) {
+        adev->hi_pcm_mode = true;
+        usleep(20000);
+    }
     pthread_mutex_lock(&adev->lock);
     pthread_mutex_lock(&out->lock);
     if (out->pause_status == true) {
