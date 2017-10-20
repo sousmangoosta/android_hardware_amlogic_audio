@@ -315,7 +315,9 @@ static int start_output_stream(struct aml_stream_out *out)
     int ret = 0;
     int i  = 0;
     struct aml_stream_out *out_removed = NULL;
-    bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && out->config.rate  <= 48000 && audio_is_linear_pcm(out->hal_format));
+    int channel_count = popcount(out->hal_channel_mask);
+    bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && out->config.rate  <= 48000 &&
+                        audio_is_linear_pcm(out->hal_format) && channel_count <= 2);
     LOGFUNC("%s(adev->out_device=%#x, adev->mode=%d)",
             __FUNCTION__, adev->out_device, adev->mode);
     if (adev->mode != AUDIO_MODE_IN_CALL) {
@@ -452,8 +454,7 @@ static int start_output_stream_direct(struct aml_stream_out *out)
 
     card = get_aml_card();
     ALOGI("%s: hdmi sound card id %d,device id %d \n", __func__, card, port);
-
-    if (out->config.channels == 6) {
+    if (out->multich== 6) {
         ALOGI("round 6ch to 8 ch output \n");
         /* our hw only support 8 channel configure,so when 5.1,hw mask the last two channels*/
         sysfs_set_sysfs_str("/sys/class/amhdmitx/amhdmitx0/aud_output_chs", "6:7");
@@ -501,12 +502,6 @@ static int start_output_stream_direct(struct aml_stream_out *out)
     out->config.avail_min = 0;
     set_codec_type(codec_type);
 
-    if (out->config.channels == 6) {
-        ALOGI("round 6ch to 8 ch output \n");
-        /* our hw only support 8 channel configure,so when 5.1,hw mask the last two channels*/
-        sysfs_set_sysfs_str("/sys/class/amhdmitx/amhdmitx0/aud_output_chs", "6:7");
-        out->config.channels = 8;
-    }
     ALOGI("ALSA open configs: channels=%d, format=%d, period_count=%d, period_size=%d,,rate=%d",
           out->config.channels, out->config.format, out->config.period_count,
           out->config.period_size, out->config.rate);
@@ -708,6 +703,8 @@ static size_t out_get_buffer_size(const struct audio_stream *stream)
         } else {
             size = PERIOD_SIZE;
         }
+        if (out->config.format == AUDIO_FORMAT_IEC61937)
+             size = PERIOD_SIZE;
         break;
     case AUDIO_FORMAT_E_AC3:
         if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
@@ -715,6 +712,8 @@ static size_t out_get_buffer_size(const struct audio_stream *stream)
         } else {
             size = PLAYBACK_PERIOD_COUNT*PERIOD_SIZE;   //PERIOD_SIZE;
         }
+        if (out->config.format == AUDIO_FORMAT_IEC61937)
+             size =  PLAYBACK_PERIOD_COUNT * PERIOD_SIZE;
         break;
     case AUDIO_FORMAT_DTS_HD:
     case AUDIO_FORMAT_DOLBY_TRUEHD:
@@ -723,6 +722,8 @@ static size_t out_get_buffer_size(const struct audio_stream *stream)
         } else {
             size = 4 * PLAYBACK_PERIOD_COUNT * PERIOD_SIZE;
         }
+       if (out->config.format == AUDIO_FORMAT_IEC61937)
+           size = 4 * PLAYBACK_PERIOD_COUNT * PERIOD_SIZE;
         break;
     case AUDIO_FORMAT_PCM:
     default:
@@ -746,18 +747,18 @@ static audio_channel_mask_t out_get_channels(const struct audio_stream *stream _
 static audio_channel_mask_t out_get_channels_direct(const struct audio_stream *stream)
 {
     const struct aml_stream_out *out = (const struct aml_stream_out *)stream;
-
+    ALOGV("out->hal_channel_mask:%0x",out->hal_channel_mask);
     return out->hal_channel_mask;
 }
 
 static audio_format_t out_get_format(const struct audio_stream *stream __unused)
 {
-    //ALOGV("Amlogic_HAL - out_get_format() return constant format pcm_16_bit");
+    ALOGV("Amlogic_HAL - out_get_format() return constant format pcm_16_bit");
     // return AUDIO_FORMAT_PCM_16_BIT;
 
     // return hal_format for passing VTS
     const struct aml_stream_out *out = (const struct aml_stream_out *)stream;
-    ALOGV("Amlogic_HAL - out_get_format() = %d", out->hal_format);
+    //ALOGV("Amlogic_HAL - out_get_format() = %d", out->hal_format);
     // if hal_format doesn't have a valid value,
     // return default value AUDIO_FORMAT_PCM_16_BIT
     if (out->hal_format == 0)
@@ -768,12 +769,12 @@ static audio_format_t out_get_format(const struct audio_stream *stream __unused)
 static audio_format_t out_get_format_direct(const struct audio_stream *stream)
 {
     const struct aml_stream_out *out = (const struct aml_stream_out *)stream;
-    ALOGV("Amlogic_HAL - out_get_format_direct() = %d", out->hal_format);
+    ALOGV("Amlogic_HAL - out_get_format_direct() = %d", out->config.format);
     // if hal_format doesn't have a valid value,
     // return default value AUDIO_FORMAT_PCM_16_BIT
-    if (out->hal_format == 0)
+    if (out->config.format == 0)
         return AUDIO_FORMAT_PCM_16_BIT;
-    return out->hal_format;
+    return out->config.format;
 }
 
 static int out_set_format(struct audio_stream *stream __unused, audio_format_t format __unused)
@@ -932,7 +933,9 @@ out_flush(struct audio_stream_out *stream)
     struct aml_stream_out *out = (struct aml_stream_out *) stream;
     struct aml_audio_device *adev = out->dev;
     int ret = 0;
-    bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && out->config.rate  <= 48000 && audio_is_linear_pcm(out->hal_format));
+    int channel_count = popcount(out->hal_channel_mask);
+    bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && out->config.rate  <= 48000 &&
+                        audio_is_linear_pcm(out->hal_format) && channel_count <= 2);
     do_standby_func standy_func = NULL;
     if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT && !hwsync_lpcm) {
         standy_func = do_output_standby_direct;
@@ -974,7 +977,9 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
     int ret;
     uint val = 0;
     bool force_input_standby = false;
-    bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && out->config.rate  <= 48000 && audio_is_linear_pcm(out->hal_format));
+    int channel_count = popcount(out->hal_channel_mask);
+    bool hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && out->config.rate  <= 48000 &&
+                        audio_is_linear_pcm(out->hal_format) && channel_count <= 2);
     do_standby_func standy_func = NULL;
     do_startup_func   startup_func = NULL;
     if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT && !hwsync_lpcm) {
@@ -2525,16 +2530,16 @@ static int out_get_render_position(const struct audio_stream_out *stream,
     uint64_t  dsp_frame_int64 = 0;
     *dsp_frames = out->last_frames_postion;
     if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
-        dsp_frame_int64 = out->last_frames_postion / out->raw_61937_frame_size;
+        dsp_frame_int64 = out->last_frames_postion ;
         *dsp_frames = (uint32_t)(dsp_frame_int64 & 0xffffffff);
         if (out->last_dsp_frame > *dsp_frames) {
             ALOGI("maybe uint32_t wraparound,print something,last %u,now %u", out->last_dsp_frame, *dsp_frames);
             ALOGI("wraparound,out_get_render_position return %u,playback time %"PRIu64" ms,sr %d\n", *dsp_frames,
-                  out->last_frames_postion * 1000 / out->raw_61937_frame_size / out->config.rate, out->config.rate);
+                  out->last_frames_postion * 1000 / out->config.rate, out->config.rate);
 
         }
     }
-    ALOGV("out_get_render_position %d\n", *dsp_frames);
+    ALOGV("out_get_render_position %d time %"PRIu64" ms\n", *dsp_frames,out->last_frames_postion * 1000/out->hal_rate);
     return 0;
 }
 
@@ -2571,9 +2576,6 @@ static int out_get_presentation_position(const struct audio_stream_out *stream, 
     *frames = out->last_frames_postion;
     *timestamp = out->timestamp;
 
-    if (out->flags & AUDIO_OUTPUT_FLAG_IEC958_NONAUDIO) {
-        *frames /= out->raw_61937_frame_size;
-    }
     ALOGV("out_get_presentation_position out %p %"PRIu64", sec = %ld, nanosec = %ld\n", out, *frames, timestamp->tv_sec, timestamp->tv_nsec);
 
     return 0;
@@ -3326,7 +3328,8 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     }
     out->config = pcm_config_out;
     //hwsync with LPCM still goes to out_write_legacy
-    hwsync_lpcm = (flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && config->sample_rate <= 48000 && audio_is_linear_pcm(config->format));
+    hwsync_lpcm = (flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && config->sample_rate <= 48000 &&
+                   audio_is_linear_pcm(config->format) && channel_count <= 2);
     ALOGI("hwsync_lpcm %d\n", hwsync_lpcm);
     if (flags & AUDIO_OUTPUT_FLAG_PRIMARY || hwsync_lpcm) {
         out->stream.common.get_channels = out_get_channels;
@@ -3353,9 +3356,27 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
             config->sample_rate = 48000;
         }
         out->config.rate = out->hal_rate = config->sample_rate;
-        out->hal_format = config->format;
+        out->hal_format = out->config.format= config->format;
+        if (config->format == AUDIO_FORMAT_IEC61937) {
+            if (audio_channel_count_from_out_mask(config->channel_mask) == 2 &&
+               (config->sample_rate == 192000 ||config->sample_rate == 176400)) {
+                out->hal_format = AUDIO_FORMAT_E_AC3;
+                out->config.rate = config->sample_rate / 4;
+             } else if (audio_channel_count_from_out_mask(config->channel_mask) >= 6 &&
+                        config->sample_rate == 192000) {
+                 out->hal_format = AUDIO_FORMAT_DTS_HD;
+             } else if (audio_channel_count_from_out_mask(config->channel_mask) == 2 &&
+                       config->sample_rate >= 32000 && config->sample_rate <= 48000) {
+                 out->hal_format =  AUDIO_FORMAT_AC3;
+             }else {
+                 ALOGE("DO not support yet!!");
+                 config->format = AUDIO_FORMAT_DEFAULT;
+                 return -EINVAL;
+             }
+             ALOGI("convert format IEC61937 to 0x%x\n",out->hal_format);
+        }
         out->raw_61937_frame_size = 1;
-        digital_codec = get_codec_type(config->format);
+        digital_codec = get_codec_type(out->hal_format);
         if (digital_codec == TYPE_EAC3) {
             out->raw_61937_frame_size = 4;
             out->config.period_size = pcm_config_out_direct.period_size * 2;
@@ -3376,7 +3397,6 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
             ALOGI("for raw audio output,force alsa stereo output\n");
             out->config.channels = 2;
             out->multich = 2;
-            out->hal_channel_mask = AUDIO_CHANNEL_OUT_STEREO;
             //config->channel_mask = AUDIO_CHANNEL_OUT_STEREO;
         }
     } else {
@@ -3512,8 +3532,9 @@ static void adev_close_output_stream(struct audio_hw_device *dev,
         free(out->audioeffect_tmp_buffer);
         Virtualizer_release();
     }
-
-    hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && out->config.rate  <= 48000 && audio_is_linear_pcm(out->hal_format));
+    int channel_count = popcount(out->hal_channel_mask);
+    hwsync_lpcm = (out->flags & AUDIO_OUTPUT_FLAG_HW_AV_SYNC && out->config.rate  <= 48000 &&
+                   audio_is_linear_pcm(out->hal_format) && channel_count <= 2);
     if (out->flags & AUDIO_OUTPUT_FLAG_PRIMARY || hwsync_lpcm) {
         out_standby(&stream->common);
     } else if (out->flags & AUDIO_OUTPUT_FLAG_DIRECT) {
