@@ -47,14 +47,16 @@ ifeq ($(strip $(BOARD_ALSA_AUDIO)),tiny)
 		frameworks/av/media/libeffects/lvm/lib/Common/lib \
 		frameworks/av/media/libeffects/lvm/lib/Common/src \
 		libTVaudio/audio
+    LOCAL_STATIC_LIBRARIES += libmusicbundle
 
-	LOCAL_STATIC_LIBRARIES += libmusicbundle
+    LOCAL_LDFLAGS_arm += $(LOCAL_PATH)/rcaudio/audio.bt.remote-arm.a
+    LOCAL_LDFLAGS_arm64 += $(LOCAL_PATH)/rcaudio/audio.bt.remote-arm64.a
 
 	LOCAL_SHARED_LIBRARIES := \
 		liblog libcutils libtinyalsa \
 		libaudioutils libdl libaudioroute libutils \
 		libaudiospdif
-	LOCAL_MODULE_TAGS := optional
+    LOCAL_MODULE_TAGS := optional
 
 	include $(BUILD_SHARED_LIBRARY)
 

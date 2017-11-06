@@ -58,7 +58,11 @@
 #include "audio_hw_profile.h"
 #include "spdifenc_wrap.h"
 #include "audio_virtual_effect.h"
-
+// for invoke huitong functions
+#include "rcaudio/huitong_audio.h"
+#include <cutils/properties.h>
+//set proprety
+#define RC_HIDRAW_FD "rc_hidraw_fd"
 /* ALSA cards for AML */
 #define CARD_AMLOGIC_BOARD 0
 /* ALSA ports for AML */
@@ -3703,28 +3707,65 @@ static int adev_open_input_stream(struct audio_hw_device *dev,
     if (!in) {
         return -ENOMEM;
     }
-
-    in->stream.common.get_sample_rate = in_get_sample_rate;
-    in->stream.common.set_sample_rate = in_set_sample_rate;
-    in->stream.common.get_buffer_size = in_get_buffer_size;
-    in->stream.common.get_channels = in_get_channels;
-    in->stream.common.get_format = in_get_format;
-    in->stream.common.set_format = in_set_format;
-    in->stream.common.standby = in_standby;
-    in->stream.common.dump = in_dump;
-    in->stream.common.set_parameters = in_set_parameters;
-    in->stream.common.get_parameters = in_get_parameters;
-    in->stream.common.add_audio_effect = in_add_audio_effect;
-    in->stream.common.remove_audio_effect = in_remove_audio_effect;
-    in->stream.set_gain = in_set_gain;
-    in->stream.read = in_read;
-    in->stream.get_input_frames_lost = in_get_input_frames_lost;
-
     in->requested_rate = config->sample_rate;
 
     in->device = devices & ~AUDIO_DEVICE_BIT_IN;
+
+    if ((in->device & AUDIO_DEVICE_IN_WIRED_HEADSET) && ENABLE_HUITONG) {
+        // usecase for huitong
+        in->stream.common.get_sample_rate = huitong_in_get_sample_rate;
+        in->stream.common.set_sample_rate = huitong_in_set_sample_rate;
+        in->stream.common.get_buffer_size = huitong_in_get_buffer_size;
+        in->stream.common.get_channels = huitong_in_get_channels;
+        in->stream.common.get_format = huitong_in_get_format;
+        in->stream.common.set_format = huitong_in_set_format;
+        in->stream.common.standby = huitong_in_standby;
+        in->stream.common.dump = huitong_in_dump;
+        in->stream.common.set_parameters = huitong_in_set_parameters;
+        in->stream.common.get_parameters = huitong_in_get_parameters;
+        in->stream.set_gain = huitong_in_set_gain;
+        in->stream.read = huitong_in_read;
+        in->stream.get_input_frames_lost = huitong_in_get_input_frames_lost;
+    } else {
+        // usecase for amlogic audio hal
+        in->stream.common.get_sample_rate = in_get_sample_rate;
+        in->stream.common.set_sample_rate = in_set_sample_rate;
+        in->stream.common.get_buffer_size = in_get_buffer_size;
+        in->stream.common.get_channels = in_get_channels;
+        in->stream.common.get_format = in_get_format;
+        in->stream.common.set_format = in_set_format;
+        in->stream.common.standby = in_standby;
+        in->stream.common.dump = in_dump;
+        in->stream.common.set_parameters = in_set_parameters;
+        in->stream.common.get_parameters = in_get_parameters;
+        in->stream.common.add_audio_effect = in_add_audio_effect;
+        in->stream.common.remove_audio_effect = in_remove_audio_effect;
+        in->stream.set_gain = in_set_gain;
+        in->stream.read = in_read;
+        in->stream.get_input_frames_lost = in_get_input_frames_lost;
+    }
+
     if (in->device & AUDIO_DEVICE_IN_ALL_SCO) {
         memcpy(&in->config, &pcm_config_bt, sizeof(pcm_config_bt));
+#if ENABLE_HUITONG
+// usecase for huitong
+    } else if (in->device & AUDIO_DEVICE_IN_WIRED_HEADSET) {
+        property_set(RC_HIDRAW_FD,"true");
+        if (hidraw_fd > 0) {
+            ALOGE("%s hidraw_fd has not been closed ago!", __FUNCTION__);
+            close(hidraw_fd);
+            hidraw_fd = -1;
+        }
+        hidraw_fd = get_hidraw_device_fd();
+        if (hidraw_fd <= 0) {
+            ALOGE("%s there is no hidraw device", __FUNCTION__);
+            return -EAGAIN;
+        }
+        part_index = 0;
+        memset(ADPCM_Data_Frame, 0, sizeof(ADPCM_Data_Frame)); //for ti rc
+
+        memcpy(&in->config, &pcm_config_vg, sizeof(pcm_config_vg));
+#endif
     } else {
         memcpy(&in->config, &pcm_config_in, sizeof(pcm_config_in));
     }
@@ -3736,6 +3777,13 @@ static int adev_open_input_stream(struct audio_hw_device *dev,
     } else {
         ALOGE("Bad value of channel count : %d", in->config.channels);
     }
+#if ENABLE_HUITONG
+    // usecase for huitong
+    if (in->device & AUDIO_DEVICE_IN_WIRED_HEADSET) {
+        config->sample_rate = in->config.rate;
+        config->channel_mask = AUDIO_CHANNEL_IN_MONO;
+    }
+#endif
     in->buffer = malloc(in->config.period_size *
                         audio_stream_in_frame_size(&in->stream));
     if (!in->buffer) {
@@ -3743,28 +3791,49 @@ static int adev_open_input_stream(struct audio_hw_device *dev,
         goto err_open;
     }
 
-    if (in->requested_rate != in->config.rate) {
-        LOGFUNC("%s(in->requested_rate=%d, in->config.rate=%d)",
-                __FUNCTION__, in->requested_rate, in->config.rate);
-        in->buf_provider.get_next_buffer = get_next_buffer;
-        in->buf_provider.release_buffer = release_buffer;
-        ret = create_resampler(in->config.rate,
-                               in->requested_rate,
-                               in->config.channels,
-                               RESAMPLER_QUALITY_DEFAULT,
-                               &in->buf_provider,
-                               &in->resampler);
+    if (!ENABLE_HUITONG) {
+        // initiate resampler only if amlogic audio hal is used
+        if (in->requested_rate != in->config.rate) {
+            LOGFUNC("%s(in->requested_rate=%d, in->config.rate=%d)",
+                    __FUNCTION__, in->requested_rate, in->config.rate);
+            in->buf_provider.get_next_buffer = get_next_buffer;
+            in->buf_provider.release_buffer = release_buffer;
+            ret = create_resampler(in->config.rate,
+                                   in->requested_rate,
+                                   in->config.channels,
+                                   RESAMPLER_QUALITY_DEFAULT,
+                                   &in->buf_provider,
+                                   &in->resampler);
 
-        if (ret != 0) {
-            ALOGE("Amlogic_HAL - create resampler failed. (%dHz --> %dHz)", in->config.rate, in->requested_rate);
-            ret = -EINVAL;
-            goto err_open;
+            if (ret != 0) {
+                ALOGE("Amlogic_HAL - create resampler failed. (%dHz --> %dHz)", in->config.rate, in->requested_rate);
+                ret = -EINVAL;
+                goto err_open;
+            }
         }
     }
 
     in->dev = ladev;
     in->standby = 1;
     *stream_in = &in->stream;
+
+#if ENABLE_HUITONG
+    ALOGE("[Abner]%s huitong_rc_platform=%d",__FUNCTION__,huitong_rc_platform);
+    if (huitong_rc_platform == RC_PLATFORM_TI) {
+    //no action here,log capture in ti decode file.it is not good!you must catpure log as below.
+    } else if (huitong_rc_platform == RC_PLATFORM_BCM) {
+        sbc_decoder_reset();
+        log_begin();
+    } else if (huitong_rc_platform == RC_PLATFORM_DIALOG) {
+        log_begin();
+    } else if (huitong_rc_platform == RC_PLATFORM_NORDIC) {
+        int error;
+        st = opus_decoder_create(16000, 1, &error);
+        Reset_BV32_Decoder(&bv32_st);
+        log_begin();
+    } else {
+    }
+#endif
     return 0;
 
 err_open:
