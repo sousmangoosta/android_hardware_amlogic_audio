@@ -10,8 +10,13 @@
 #define CARD_AMLOGIC_DEFAULT CARD_AMLOGIC_BOARD
 /* ALSA ports for AML */
 #define PORT_MM 1
+
 /* number of frames per period */
-#define DEFAULT_PERIOD_SIZE  1024   //(1024 * 2)
+/*
+ * change DEFAULT_PERIOD_SIZE from 1024 to 512 for passing CTS
+ * test case test4_1MeasurePeakRms(android.media.cts.VisualizerTest)
+ */
+#define DEFAULT_PERIOD_SIZE  512 //1024   //(1024 * 2)
 static unsigned PERIOD_SIZE = DEFAULT_PERIOD_SIZE;
 /* number of periods for low power playback */
 #define PLAYBACK_PERIOD_COUNT 4

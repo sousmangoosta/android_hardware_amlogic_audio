@@ -11,10 +11,10 @@ extern "C" {
 #define RAS_STOP_CMD                    0x02
 #define RAS_DATA_RAW_CMD                0x03
 
-#ifdef LOG_TAG
-#undef LOG_TAG
-#endif
-#define LOG_TAG "huitong_audio_hw"
+//#ifdef LOG_TAG
+//#undef LOG_TAG
+//#endif
+//#define LOG_TAG "huitong_audio_hw"
 
 //#define LOG_NDEBUG 0
 //#define LOG_NDEBUG_FUNCTION
