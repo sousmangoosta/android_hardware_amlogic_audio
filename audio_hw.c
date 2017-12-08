@@ -515,6 +515,7 @@ static int start_output_stream_direct(struct aml_stream_out *out)
         if (!pcm_is_ready(out->pcm)) {
             ALOGE("cannot open pcm_out driver: %s", pcm_get_error(out->pcm));
             pcm_close(out->pcm);
+            out->pcm = NULL;
             return -EINVAL;
         }
     } else {
@@ -898,6 +899,7 @@ static int out_standby(struct audio_stream *stream)
 static int out_standby_direct(struct audio_stream *stream)
 {
     struct aml_stream_out *out = (struct aml_stream_out *) stream;
+    struct aml_audio_device *adev = out->dev;
     int status = 0;
 
     ALOGI("%s(%p),out %p", __FUNCTION__, stream, out);
@@ -909,7 +911,8 @@ static int out_standby_direct(struct audio_stream *stream)
             free(out->buffer);
             out->buffer = NULL;
         }
-
+        if (adev->hi_pcm_mode)
+            adev->hi_pcm_mode = false;
         out->standby = 1;
         pcm_close(out->pcm);
         out->pcm = NULL;
@@ -1248,11 +1251,16 @@ static char *out_get_parameters(const struct audio_stream *stream, const char *k
     struct aml_stream_out *out = (struct aml_stream_out *) stream;
     struct aml_audio_device *adev = out->dev;
     ALOGI("out_get_parameters %s,out %p\n", keys, out);
+    struct str_parms *parms;
+    audio_format_t format;
+    int ret = 0;
+    parms = str_parms_create_str(keys);
+    ret = str_parms_get_int(parms, AUDIO_PARAMETER_STREAM_FORMAT ,&format);
     if (strstr(keys, AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES)) {
         if (out->out_device & AUDIO_DEVICE_OUT_HDMI_ARC) {
             cap = (char *)get_hdmi_arc_cap(adev->hdmi_arc_ad, HDMI_ARC_MAX_FORMAT, AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES);
         } else {
-            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES);
+            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_SAMPLING_RATES,format);
         }
         if (cap) {
             para = strdup(cap);
@@ -1266,7 +1274,7 @@ static char *out_get_parameters(const struct audio_stream *stream, const char *k
         if (out->out_device & AUDIO_DEVICE_OUT_HDMI_ARC) {
             cap = (char *)get_hdmi_arc_cap(adev->hdmi_arc_ad, HDMI_ARC_MAX_FORMAT, AUDIO_PARAMETER_STREAM_SUP_CHANNELS);
         } else {
-            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_CHANNELS);
+            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_CHANNELS,format);
         }
         if (cap) {
             para = strdup(cap);
@@ -1280,7 +1288,7 @@ static char *out_get_parameters(const struct audio_stream *stream, const char *k
         if (out->out_device & AUDIO_DEVICE_OUT_HDMI_ARC) {
             cap = (char *)get_hdmi_arc_cap(adev->hdmi_arc_ad, HDMI_ARC_MAX_FORMAT, AUDIO_PARAMETER_STREAM_SUP_FORMATS);
         } else {
-            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_FORMATS);
+            cap = (char *)get_hdmi_sink_cap(AUDIO_PARAMETER_STREAM_SUP_FORMATS,format);
         }
         if (cap) {
             para = strdup(cap);
@@ -1477,6 +1485,14 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
      */
     pthread_mutex_lock(&adev->lock);
     pthread_mutex_lock(&out->lock);
+    //if hi pcm mode ,we need releae i2s device so direct stream can get it.
+    if (adev->hi_pcm_mode ) {
+        if (!out->standby)
+            do_output_standby(out);
+         ret = -1 ;
+         pthread_mutex_unlock(&adev->lock);
+         goto exit;
+    }
     //here to check whether hwsync out stream and other stream are enabled at the same time.
     //if that we need do the hal mixer of the two out stream.
     if (out->hw_sync_mode == 1) {
@@ -1645,7 +1661,8 @@ if (!(adev->out_device & AUDIO_DEVICE_OUT_ALL_SCO)) {
     //samesource_flag = get_sysfs_int("/sys/class/audiodsp/audio_samesource");
     if (codec_type != out->last_codec_type/*samesource_flag == 0*/ && codec_type == 0) {
         ALOGI("to enable same source,need reset alsa,type %d,same source flag %d \n", codec_type, samesource_flag);
-        pcm_stop(out->pcm);
+        if (out->pcm)
+           pcm_stop(out->pcm);
     }
     out->last_codec_type = codec_type;
 }
@@ -2244,6 +2261,14 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
     */
     ALOGV("out_write_direct:out %p,position %zu, out_write size %"PRIu64,
             out, bytes, out->frame_write_sum);
+    /*when hi-pcm stopped  and switch to 2-ch , then switch to hi-pcm,hi-pcm-mode must be
+     set and wait 20ms for i2s device release*/
+   if (get_codec_type(out->hal_format) == TYPE_PCM && !adev->hi_pcm_mode
+        && (out->config.rate > 48000 || out->config.channels >= 6)
+        ) {
+        adev->hi_pcm_mode = true;
+        usleep(20000);
+    }
     pthread_mutex_lock(&adev->lock);
     pthread_mutex_lock(&out->lock);
     if (out->pause_status == true) {
@@ -2413,93 +2438,76 @@ static ssize_t out_write_direct(struct audio_stream_out *stream, const void* buf
         }
         goto exit;
     }
-    if (!out->standby) {
-        if (out->multich == 8) {
-            int *p32 = NULL;
-            short *p16 = (short *) buf;
-            short *p16_temp;
-            int i, NumSamps;
-            NumSamps = out_frames * frame_size / sizeof(short);
-            p32 = malloc(NumSamps * sizeof(int));
-            if (p32 != NULL) {
-                //here to swap the channnl data here
-                //actual now:L,missing,R,RS,RRS,,LS,LRS,missing
-                //expect L,C,R,RS,RRS,LRS,LS,LFE (LFE comes from to center)
-                //actual  audio data layout  L,R,C,none/LFE,LRS,RRS,LS,RS
-                p16_temp = (short *) p32;
-                for (i = 0; i < NumSamps; i = i + 8) {
-                    p16_temp[0 + i]/*L*/ = p16[0 + i];
-                    p16_temp[1 + i]/*R*/ = p16[1 + i];
-                    p16_temp[2 + i] /*LFE*/ = p16[3 + i];
-                    p16_temp[3 + i] /*C*/ = p16[2 + i];
-                    p16_temp[4 + i] /*LS*/ = p16[6 + i];
-                    p16_temp[5 + i] /*RS*/ = p16[7 + i];
-                    p16_temp[6 + i] /*LRS*/ = p16[4 + i];
-                    p16_temp[7 + i]/*RRS*/ = p16[5 + i];
-                }
-                memcpy(p16, p16_temp, NumSamps * sizeof(short));
-                for (i = 0; i < NumSamps; i++) { //suppose 16bit/8ch PCM
-                    p32[i] = p16[i] << 16;
-                }
-                ret = pcm_write(out->pcm, (void *) p32, NumSamps * 4);
-                free(p32);
-            }
-        } else if (out->multich == 6) {
-            int *p32 = NULL;
-            short *p16 = (short *) buf;
-            short *p16_temp;
-            int i, j, NumSamps, real_samples;
-            real_samples = out_frames * frame_size / sizeof(short);
-            NumSamps = real_samples * 8 / 6;
-            //ALOGI("6ch to 8 ch real %d, to %d,bytes %d,frame size %d\n",real_samples,NumSamps,bytes,frame_size);
-            p32 = malloc(NumSamps * sizeof(int));
-            if (p32 != NULL) {
-                p16_temp = (short *) p32;
-                for (i = 0; i < real_samples; i = i + 6) {
-                    p16_temp[0 + i]/*L*/ = p16[0 + i];
-                    p16_temp[1 + i]/*R*/ = p16[1 + i];
-                    p16_temp[2 + i] /*LFE*/ = p16[3 + i];
-                    p16_temp[3 + i] /*C*/ = p16[2 + i];
-                    p16_temp[4 + i] /*LS*/ = p16[4 + i];
-                    p16_temp[5 + i] /*RS*/ = p16[5 + i];
-                }
-                memcpy(p16, p16_temp, real_samples * sizeof(short));
-                memset(p32, 0, NumSamps * sizeof(int));
-                for (i = 0, j = 0; j < NumSamps; i = i + 6, j = j + 8) { //suppose 16bit/8ch PCM
-                    p32[j] = p16[i] << 16;
-                    p32[j + 1] = p16[i + 1] << 16;
-                    p32[j + 2] = p16[i + 2] << 16;
-                    p32[j + 3] = p16[i + 3] << 16;
-                    p32[j + 4] = p16[i + 4] << 16;
-                    p32[j + 5] = p16[i + 5] << 16;
-                }
-                ret = pcm_write(out->pcm, (void *) p32, NumSamps * 4);
-                free(p32);
-            }
-        } else {
-#if 0
-            codec_type =
-                get_sysfs_int("/sys/class/audiodsp/digital_codec");
-            samesource_flag =
-                get_sysfs_int("/sys/class/audiodsp/audio_samesource");
-            if (out->last_codec_type > 0 && codec_type != out->last_codec_type) {
-                samesource_flag = 1;
-            }
-            if (samesource_flag == 1 && codec_type) {
-                ALOGI
-                ("to disable same source,need reset alsa,last %d,type %d,same source flag %d ,\n",
-                 out->last_codec_type, codec_type, samesource_flag);
-                out->last_codec_type = codec_type;
-                pcm_stop(out->pcm);
-            }
-#endif
-            ALOGV("write size %zu\n", out_frames * frame_size);
-            ret = pcm_write(out->pcm, (void *) buf, out_frames * frame_size);
-            if (ret == 0) {
-                out->frame_write_sum += out_frames;
-            }
-        }
-    }
+    //here handle LPCM audio (hi-res audio) which goes to direct output
+       if (!out->standby) {
+           int write_size = out_frames * frame_size;
+           //for 5.1/7.1 LPCM direct output,we assume only use left channel volume
+           if (!codec_type_is_raw_data(out->codec_type) && (out->multich > 2 || out->hal_format != AUDIO_FORMAT_PCM_16_BIT)) {
+               //do audio format and data conversion here
+               int input_frames = out_frames;
+               write_buf = convert_audio_sample_for_output(input_frames, out->hal_format, out->multich, buf, &write_size);
+               //volume apply here,TODO need apply that inside convert_audio_sample_for_output function.
+               if (out->multich == 2) {
+                   short *sample = (short*)write_buf;
+                   int l, r;
+                   int kk;
+                   for (kk = 0; kk <  input_frames; kk++) {
+                       l = out->volume_l * sample[kk * 2];
+                       sample[kk * 2] = CLIP(l);
+                       r = out->volume_r * sample[kk * 2 + 1];
+                       sample[kk * 2 + 1] = CLIP(r);
+                   }
+               } else {
+                   int *sample = (int*)write_buf;
+                   int kk;
+                   for (kk = 0; kk <  write_size / 4; kk++) {
+                       sample[kk] = out->volume_l * sample[kk];
+                   }
+               }
+
+               if (write_buf) {
+                    if (getprop_bool("media.hdmihal.outdump")) {
+                    FILE *fp1 = fopen("/data/tmp/hdmi_audio_out8.pcm", "a+");
+                     if (fp1) {
+                     int flen = fwrite((char *)buffer, 1, out_frames * frame_size, fp1);
+                     LOGFUNC("flen = %d---outlen=%d ", flen, out_frames * frame_size);
+                        fclose(fp1);
+                       } else {
+                          LOGFUNC("could not open file:/data/hdmi_audio_out.pcm");
+                       }
+                   }
+                   ret = pcm_write(out->pcm, write_buf, write_size);
+                   if (ret == 0) {
+                       out->frame_write_sum += out_frames;
+                   }else {
+                       ALOGI("pcm_get_error(out->pcm):%s",pcm_get_error(out->pcm));
+                   }
+                   if (write_buf) {
+                       free(write_buf);
+                   }
+               }
+           } else {
+               //2 channel LPCM or raw data pass through
+               if (!codec_type_is_raw_data(out->codec_type) && out->config.channels == 2) {
+                   short *sample = (short*)buf;
+                   int l, r;
+                   int kk;
+                   for (kk = 0; kk <  out_frames; kk++) {
+                       l = out->volume_l * sample[kk * 2];
+                       sample[kk * 2] = CLIP(l);
+                       r = out->volume_r * sample[kk * 2 + 1];
+                       sample[kk * 2 + 1] = CLIP(r);
+                   }
+               }
+               ret = pcm_write(out->pcm, (void *) buf, out_frames * frame_size);
+               if (ret == 0) {
+                   out->frame_write_sum += out_frames;
+               }else {
+                   ALOGI("pcm_get_error(out->pcm):%s",pcm_get_error(out->pcm));
+               }
+           }
+       }
+
 exit:
     total_frame = out->frame_write_sum + out->frame_skip_sum;
     latency_frames = out_get_latency_frames(stream);
@@ -3355,7 +3363,11 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
         }
         /* set default pcm config for direct. */
         out->config = pcm_config_out_direct;
-        out->hal_channel_mask = config->channel_mask;
+        if (popcount(config->channel_mask) == 0) {
+            config->channel_mask =AUDIO_CHANNEL_OUT_STEREO;
+        }
+        out->hal_channel_mask  = config->channel_mask;
+        //out->config.channels = popcount(config->channel_mask);
         if (config->sample_rate == 0) {
             config->sample_rate = 48000;
         }
@@ -3402,6 +3414,10 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
             out->config.channels = 2;
             out->multich = 2;
             //config->channel_mask = AUDIO_CHANNEL_OUT_STEREO;
+        }
+        if (digital_codec == TYPE_PCM && (out->config.rate > 48000 || out->config.channels >= 6)) {
+            ALOGI("open hi pcm mode !\n");
+            ladev->hi_pcm_mode = true;
         }
     } else {
         // TODO: add other cases here
@@ -3934,7 +3950,7 @@ static int adev_open(const hw_module_t* module, const char* name,
     adev->mode = AUDIO_MODE_NORMAL;
     adev->out_device = AUDIO_DEVICE_OUT_SPEAKER;
     adev->in_device = AUDIO_DEVICE_IN_BUILTIN_MIC & ~AUDIO_DEVICE_BIT_IN;
-
+    adev->hi_pcm_mode = false;
     select_devices(adev);
 
     *device = &adev->hw_device.common;
