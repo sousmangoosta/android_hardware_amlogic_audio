@@ -1427,7 +1427,7 @@ static ssize_t out_write_legacy(struct audio_stream_out *stream, const void* buf
     /* if hwsync output stream are enabled,write  other output to a mixe buffer and sleep for the pcm duration time  */
     if (adev->hwsync_output != NULL && adev->hwsync_output != out) {
         //ALOGI("dev hwsync enable,hwsync %p) cur (%p),size %d\n",adev->hwsync_output,out,bytes);
-        //      out->frame_write_sum += in_frames;
+        out->frame_write_sum += in_frames;
 #if 0
         if (!out->standby) {
             do_output_standby(out);
