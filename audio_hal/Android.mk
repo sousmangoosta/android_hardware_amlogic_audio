@@ -14,9 +14,12 @@
 
 ifeq ($(strip $(BOARD_ALSA_AUDIO)),tiny)
 
-    LOCAL_PATH := $(call my-dir)
+LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
+
+LOCAL_ARM_MODE := arm
+
 LOCAL_MODULE := libnano
 LOCAL_SRC_FILES_arm := ../bt_voice/nano/32/libnano.so
 LOCAL_SRC_FILES_arm64 := ../bt_voice/nano/64/libnano.so
@@ -83,10 +86,10 @@ include $(BUILD_PREBUILT)
         audio_port.c \
         sub_mixing_factory.c \
         audio_data_process.c \
-        ../../../../frameworks/av/media/libaudioprocessing/AudioResampler.cpp.arm \
-        ../../../../frameworks/av/media/libaudioprocessing/AudioResamplerCubic.cpp.arm \
-        ../../../../frameworks/av/media/libaudioprocessing/AudioResamplerSinc.cpp.arm \
-        ../../../../frameworks/av/media/libaudioprocessing/AudioResamplerDyn.cpp.arm \
+        ../../../../frameworks/av/media/libaudioprocessing/AudioResampler.cpp \
+        ../../../../frameworks/av/media/libaudioprocessing/AudioResamplerCubic.cpp \
+        ../../../../frameworks/av/media/libaudioprocessing/AudioResamplerSinc.cpp \
+        ../../../../frameworks/av/media/libaudioprocessing/AudioResamplerDyn.cpp \
         aml_resample_wrap.cpp \
         audio_simple_resample_api.c \
         aml_audio_resample_manager.c \
